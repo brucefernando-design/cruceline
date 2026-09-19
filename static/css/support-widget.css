@@ -125,45 +125,35 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* Barra superior de acción humana */
-.cl-chat-human-bar {
-  background: rgba(37, 211, 102, 0.08);
-  border-bottom: 1px solid rgba(37, 211, 102, 0.2);
-  padding: 8px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-}
-
-.cl-chat-human-bar span {
-  color: #a8d5be;
-  font-weight: 500;
-}
-
-.cl-chat-human-btn {
+/* Botón contextual de WhatsApp (solo cuando el asistente no puede ayudar) */
+.cl-chat-wa-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   background: #25D366;
   color: #082112;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 700;
-  padding: 5px 10px;
-  border-radius: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  margin-top: 8px;
   text-decoration: none;
-  transition: background 0.15s;
+  width: fit-content;
+  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.35);
+  transition: background 0.15s, transform 0.1s;
 }
 
-.cl-chat-human-btn:hover {
+.cl-chat-wa-pill:hover {
   background: #20ba5a;
+  transform: translateY(-1px);
 }
 
-.cl-chat-human-btn svg {
-  width: 13px;
-  height: 13px;
+.cl-chat-wa-pill svg {
+  width: 14px;
+  height: 14px;
   fill: currentColor;
 }
+
 
 /* Área de Mensajes */
 .cl-chat-messages {
