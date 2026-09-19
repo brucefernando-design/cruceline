@@ -84,24 +84,26 @@ sudo certbot --nginx -d tms.tudominio.com
 
 ---
 
-## Respaldo Diario Automatizado (Cron)
+## Después del primer deploy
 
-Agrega esta línea al cron del sistema para respaldar la base de datos todas las madrugadas:
-
-```bash
-sudo crontab -e
-```
-Pega al final del archivo:
-```cron
-15 3 * * * /opt/cruceline/deploy/backup.sh >/dev/null 2>&1
-```
+- **Poner `CRUCELINE_INVITE_CODE` en `.env`:**
+  - Para proteger el alta pública en internet, define la variable `CRUCELINE_INVITE_CODE` en `/opt/cruceline/.env` (puedes generar uno seguro con `openssl rand -hex 8`).
+  - **Alta pública:** Cualquier registro desde la pantalla de inicio ("Crear empresa") o vía `POST /api/auth/register` requiere obligatoriamente ingresar este código; de lo contrario el servidor responde `403 Forbidden`.
+  - **Superadmin:** Puede crear empresas directamente sin código de invitación a través del endpoint `POST /api/admin/companies` o desde la consola de Superadmin.
+- **Backup Docker y Cron Automatizado:**
+  - El script `deploy/backup.sh` detecta si el contenedor `cruceline` está activo y realiza un respaldo atómico vía SQLite dentro del volumen de Docker, conservando hasta un máximo de 14 copias históricas.
+  - Configura la ejecución periódica en el crontab del host (`sudo crontab -e`):
+    ```cron
+    15 3 * * * /opt/cruceline/deploy/backup.sh >/dev/null 2>&1
+    ```
 
 ---
 
 ## Primer Acceso y Creación de Empresa Piloto
 
 1. Ingresa a `https://tms.tudominio.com`.
-2. Haz clic en **"Crear empresa"**.
+2. Haz clic en **"Crear empresa"** e ingresa el `CRUCELINE_INVITE_CODE` configurado.
 3. Registra el nombre de la línea transportista, nombre del dueño y contraseña segura.
 4. Desde el módulo **"Usuarios"**, el dueño podrá dar de alta a sus despachadores, mecánicos de taller y operadores.
 5. ¡Listo para operar fletes nacionales e internacionales!
+
