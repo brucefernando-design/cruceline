@@ -499,6 +499,12 @@ def index():
     return send_from_directory(STATIC, "index.html")
 
 
+@app.get("/landing")
+@app.get("/landing/")
+def landing():
+    return send_from_directory(STATIC, "landing.html")
+
+
 @app.get("/api/health")
 def health():
     try:
