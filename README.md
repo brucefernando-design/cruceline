@@ -58,7 +58,13 @@
 ## 🔐 Cuentas y Accesos
 
 ### En Producción (`CRUCELINE_ENV=production`)
-La base de datos arranca limpia sin usuarios predeterminados (`CRUCELINE_SEED=0`). Cada línea de transporte se registra desde **"Crear empresa"** y el dueño define su propia contraseña segura. El superadministrador accede mediante la clave maestra `CRUCELINE_SECRET` desde la consola de superadmin.
+La base de datos arranca limpia sin usuarios predeterminados (`CRUCELINE_SEED=0`). 
+
+Para controlar el acceso comercial y evitar registros públicos no autorizados en internet:
+- **Alta por Invitación:** El registro de empresas (`POST /api/auth/register`) requiere obligatoriamente el código de invitación `CRUCELINE_INVITE_CODE`. El dueño de CruceLine proporciona este código a cada línea de transporte autorizada al contratar su piloto.
+- **Alta Directa por Superadmin:** El dueño de CruceLine puede registrar a cualquier empresa directamente desde la consola de superadmin (`POST /api/admin/companies`) sin necesidad de código de invitación.
+- **Acceso Superadmin:** Protegido por la clave maestra `CRUCELINE_SECRET` desde la consola de superadmin (`/#superadmin`).
+- **Anulación de Viajes (Sin Borrado):** Los viajes nunca se borran físicamente (no hay DELETE). El dueño o despachador pueden cambiar el estatus a **"Anulado"** para preservar la auditoría operativa sin alterar la cartera ni el tablero.
 
 ### Semilla de Demostración (Únicamente en Desarrollo con `CRUCELINE_SEED=1`)
 Si en desarrollo local activas `CRUCELINE_SEED=1` en tu `.env`, se cargará la línea demo *Transportes del Bravo*:
