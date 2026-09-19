@@ -42,6 +42,7 @@ fi
 
 # Reconstruir y levantar contenedor
 docker compose up -d --build
+sleep 2
 
 # Verificar salud
 echo "Healthcheck:"
