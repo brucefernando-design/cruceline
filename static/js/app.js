@@ -667,7 +667,8 @@ function renderSuperadmin() {
         <h3>Autenticación Maestra</h3>
         <p class="muted" style="margin-bottom:14px">Ingresa la clave secreta <code>CRUCELINE_SECRET</code> configurada en el servidor:</p>
         <form id="admin-auth-form">
-          <div class="field"><label>Clave Maestra</label><input type="password" id="admin-secret-input" required placeholder="CRUCELINE_SECRET"></div>
+          <input type="text" name="username" value="superadmin" autocomplete="username" style="display:none">
+          <div class="field"><label>Clave Maestra</label><input type="password" id="admin-secret-input" autocomplete="current-password" required placeholder="CRUCELINE_SECRET"></div>
           <p id="admin-auth-error" class="muted" style="color:var(--bad)"></p>
           <button class="btn danger" type="submit">Ingresar a Consola</button>
         </form>

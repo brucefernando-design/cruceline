@@ -22,8 +22,8 @@
         <h2>Entrar a la línea</h2>
         <p class="muted">Cada empresa ve exclusivamente sus unidades y viajes.</p>
         <form id="login-form">
-          <div class="field"><label>Correo</label><input name="email" type="email" required placeholder="tu-correo@empresa.mx"></div>
-          <div class="field"><label>Contraseña</label><input name="password" type="password" required placeholder="••••••••"></div>
+          <div class="field"><label>Correo</label><input name="email" type="email" autocomplete="username" required placeholder="tu-correo@empresa.mx"></div>
+          <div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required placeholder="••••••••"></div>
           <p id="login-error" class="muted" style="color:var(--bad)"></p>
           <button class="btn" type="submit">Entrar</button>
           <button class="btn ghost" type="button" id="show-register">Crear empresa</button>
@@ -38,8 +38,8 @@
         <form id="register-form">
           <div class="field"><label>Nombre de la línea / transportista</label><input name="company" required placeholder="Transportes Express..."></div>
           <div class="field"><label>Tu nombre completo</label><input name="name" required placeholder="Nombre del responsable"></div>
-          <div class="field"><label>Correo electrónico</label><input name="email" type="email" required placeholder="dueno@transportes.com"></div>
-          <div class="field"><label>Contraseña (mínimo 8 caracteres)</label><input name="password" type="password" required minlength="8"></div>
+          <div class="field"><label>Correo electrónico</label><input name="email" type="email" autocomplete="email" required placeholder="dueno@transportes.com"></div>
+          <div class="field"><label>Contraseña (mínimo 8 caracteres)</label><input name="password" type="password" autocomplete="new-password" required minlength="8"></div>
           <div class="field"><label>Base de operaciones (ciudad y estado)</label><input name="base" value="Nuevo Laredo, Tamaulipas" placeholder="Ej: Nuevo Laredo / Monterrey / Laredo TX"></div>
           <div class="field"><label>Patio principal / terminal</label><input name="patio" value="Patio Km 8.5 · Carretera a Colombia" placeholder="Dirección o referencia del patio"></div>
           <p id="register-error" class="muted" style="color:var(--bad)"></p>
@@ -51,7 +51,8 @@
         <h2>Consola Superadmin</h2>
         <p class="muted">Gestión maestra de empresas y corte de servicio por impago.</p>
         <form id="superadmin-form">
-          <div class="field"><label>Clave Maestra (CRUCELINE_SECRET)</label><input name="secret" type="password" required placeholder="Clave de superadmin"></div>
+          <div class="field"><label>Usuario Superadmin</label><input name="username" type="text" value="superadmin" autocomplete="username" readonly style="background:var(--bg)"></div>
+          <div class="field"><label>Clave Maestra (CRUCELINE_SECRET)</label><input name="secret" type="password" autocomplete="current-password" required placeholder="Clave de superadmin"></div>
           <p id="superadmin-error" class="muted" style="color:var(--bad)"></p>
           <button class="btn danger" type="submit">Entrar a Superadmin</button>
           <button class="btn ghost" type="button" id="show-login-from-admin">Volver al login de empresa</button>
