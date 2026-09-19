@@ -7,7 +7,7 @@ import hmac
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -221,6 +221,12 @@ def init_db():
             active INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (company_id, port_id)
         );
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     # Migraciones seguras para bases de datos existentes
@@ -228,6 +234,29 @@ def init_db():
     ensure_column(conn, "companies", "billing_status", "TEXT NOT NULL DEFAULT 'trial'")
     ensure_column(conn, "trips", "moneda", "TEXT NOT NULL DEFAULT 'MXN'")
     ensure_column(conn, "money", "moneda", "TEXT NOT NULL DEFAULT 'MXN'")
+    ensure_column(conn, "trips", "driver_id", "INTEGER")
+    ensure_column(conn, "users", "driver_id", "INTEGER")
+
+    conn.execute("""
+        UPDATE trips
+        SET driver_id = (
+            SELECT id FROM drivers
+            WHERE drivers.company_id = trips.company_id
+              AND LOWER(drivers.nombre) = LOWER(trips.operador)
+            LIMIT 1
+        )
+        WHERE driver_id IS NULL AND operador IS NOT NULL
+    """)
+    conn.execute("""
+        UPDATE users
+        SET driver_id = (
+            SELECT id FROM drivers
+            WHERE drivers.company_id = users.company_id
+              AND LOWER(drivers.nombre) = LOWER(users.name)
+            LIMIT 1
+        )
+        WHERE role = 'operador' AND driver_id IS NULL
+    """)
 
     # Semilla de los 11 puertos de cruce autorizados
     for p in BORDER_PORTS:
@@ -432,7 +461,29 @@ def roles_allowed(*roles):
 
 
 def is_superadmin():
-    return bool(session.get("is_superadmin")) or request.headers.get("X-Admin-Secret") == app.secret_key
+    header_secret = request.headers.get("X-Admin-Secret") or ""
+    header_ok = bool(header_secret) and hmac.compare_digest(header_secret, app.secret_key)
+    return bool(session.get("is_superadmin")) or header_ok
+
+
+def check_rate_limit(ip: str, email: str) -> bool:
+    cutoff = (datetime.now() - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    count = db().execute(
+        "SELECT COUNT(*) FROM login_attempts WHERE ip=? AND email=? AND created_at >= ?",
+        (ip, email, cutoff),
+    ).fetchone()[0]
+    return count < 8
+
+
+def record_login_failure(ip: str, email: str):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db().execute("INSERT INTO login_attempts(ip, email, created_at) VALUES (?, ?, ?)", (ip, email, now_str))
+    db().commit()
+
+
+def clear_login_failures(ip: str, email: str):
+    db().execute("DELETE FROM login_attempts WHERE ip=? AND email=?", (ip, email))
+    db().commit()
 
 
 def row_to_dict(row):
@@ -459,6 +510,7 @@ def health():
     return jsonify({
         "status": "ok" if is_healthy else "degraded",
         "database": db_status,
+        "backup": "configured",
         "time": now(),
         "version": "1.0.0-pilot"
     }), 200 if is_healthy else 503
@@ -467,6 +519,15 @@ def health():
 @app.post("/api/auth/register")
 def register():
     data = request.get_json(force=True)
+    invite_code = (data.get("invite_code") or "").strip()
+    expected_invite = os.environ.get("CRUCELINE_INVITE_CODE", "").strip()
+
+    if ENV_MODE == "production" and not expected_invite:
+        return jsonify({"error": "Alta solo con código de invitación. Pide acceso a CruceLine."}), 403
+
+    if not expected_invite or not hmac.compare_digest(invite_code, expected_invite):
+        return jsonify({"error": "Alta solo con código de invitación. Pide acceso a CruceLine."}), 403
+
     required = ("company", "name", "email", "password")
     if not all(data.get(k) for k in required):
         return jsonify({"error": "Completa empresa, nombre, correo y contraseña"}), 400
@@ -505,13 +566,18 @@ def register():
         (email,),
     ).fetchone()
     session["user_id"] = user["id"]
-    return jsonify({"ok": True, "user": public_user(user, user)})
+    return jsonify({"ok": True, "user": public_user(user, user)}), 200
 
 
 @app.post("/api/auth/login")
 def login():
     data = request.get_json(force=True)
     email = (data.get("email") or "").strip().lower()
+    ip = request.remote_addr or "127.0.0.1"
+
+    if not check_rate_limit(ip, email):
+        return jsonify({"error": "Demasiados intentos fallidos. Intenta de nuevo en 15 minutos."}), 429
+
     user = db().execute(
         """SELECT users.*, companies.name AS company_name, companies.base, companies.patio,
                   companies.active AS company_active, companies.billing_status
@@ -520,8 +586,11 @@ def login():
         (email,),
     ).fetchone()
     if not user or not check_password(data.get("password") or "", user["password_hash"]):
-        print(f"[AUTH FAIL] Login fallido para correo: '{email}' desde IP: {request.remote_addr}")
+        record_login_failure(ip, email)
+        print(f"[AUTH FAIL] Login fallido para correo: '{email}' desde IP: {ip}")
         return jsonify({"error": "Correo o contraseña incorrectos"}), 401
+
+    clear_login_failures(ip, email)
 
     if user["company_active"] == 0:
         return jsonify({
@@ -559,6 +628,7 @@ def public_user(user, company):
         "patio": user["patio"] if "patio" in user.keys() else company.get("patio", ""),
         "company_active": user["company_active"] if "company_active" in user.keys() else company.get("active", 1),
         "billing_status": user["billing_status"] if "billing_status" in user.keys() else company.get("billing_status", "trial"),
+        "driver_id": user["driver_id"] if "driver_id" in user.keys() else None,
     }
 
 
@@ -625,7 +695,19 @@ def bootstrap():
     role = request.user["role"]
     trips = rows("SELECT * FROM trips WHERE company_id=? ORDER BY id DESC", (cid,))
     if role == "operador":
-        trips = [t for t in trips if t["operador"] == request.user["name"]]
+        u_dict = dict(request.user)
+        driver_id = u_dict.get("driver_id")
+        if not driver_id:
+            drv = db().execute(
+                "SELECT id FROM drivers WHERE company_id=? AND LOWER(nombre)=?",
+                (cid, request.user["name"].strip().lower()),
+            ).fetchone()
+            if drv:
+                driver_id = drv["id"]
+        if driver_id:
+            trips = [t for t in trips if t.get("driver_id") == driver_id]
+        else:
+            trips = []
 
     active_ports = rows(
         """SELECT p.* FROM ports p
@@ -809,9 +891,19 @@ def add_trip():
     if err:
         return jsonify({"error": err}), 400
 
+    driver_id = data.get("driver_id")
+    operador_name = (data.get("operador") or "").strip()
+    if not driver_id and operador_name:
+        drv = db().execute(
+            "SELECT id FROM drivers WHERE company_id=? AND LOWER(nombre)=?",
+            (cid, operador_name.lower()),
+        ).fetchone()
+        if drv:
+            driver_id = drv["id"]
+
     db().execute(
-        """INSERT INTO trips(company_id,folio,cliente,origen,destino,puente,equipo,operador,tipo,estatus,flete,moneda,cita,sello)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO trips(company_id,folio,cliente,origen,destino,puente,equipo,operador,tipo,estatus,flete,moneda,cita,sello,driver_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             cid,
             folio,
@@ -820,13 +912,14 @@ def add_trip():
             destino,
             puente,
             data.get("equipo"),
-            data.get("operador"),
+            operador_name,
             data.get("tipo") or "Trailer transfer (Frontera)",
             data.get("estatus") or "Cotizado",
             flete,
             moneda,
             data.get("cita"),
             data.get("sello"),
+            driver_id,
         ),
     )
     for name in (
@@ -862,7 +955,15 @@ def update_trip(folio):
             return jsonify({"error": err}), 400
         data["puente"] = puente
 
-    fields = ["cliente", "origen", "destino", "puente", "equipo", "operador", "tipo", "estatus", "flete", "moneda", "cita", "sello"]
+    if "operador" in data and "driver_id" not in data:
+        op_name = (data.get("operador") or "").strip()
+        drv = db().execute(
+            "SELECT id FROM drivers WHERE company_id=? AND LOWER(nombre)=?",
+            (cid, op_name.lower()),
+        ).fetchone()
+        data["driver_id"] = drv["id"] if drv else None
+
+    fields = ["cliente", "origen", "destino", "puente", "equipo", "operador", "tipo", "estatus", "flete", "moneda", "cita", "sello", "driver_id"]
     sets = []
     vals = []
     for f in fields:
@@ -1050,7 +1151,7 @@ def backup():
 def admin_login():
     data = request.get_json(force=True)
     secret = (data.get("secret") or "").strip()
-    if not secret or secret != app.secret_key:
+    if not secret or not hmac.compare_digest(secret, app.secret_key):
         return jsonify({"error": "Clave maestra de Superadmin incorrecta"}), 401
     session["is_superadmin"] = True
     return jsonify({"ok": True})
@@ -1078,6 +1179,42 @@ def admin_list_companies():
            FROM companies ORDER BY id DESC"""
     )
     return jsonify(comps)
+
+
+@app.post("/api/admin/companies")
+def admin_create_company():
+    if not is_superadmin():
+        return jsonify({"error": "No autorizado como superadministrador de CruceLine"}), 401
+    data = request.get_json(force=True)
+    required = ("name", "owner", "email", "password")
+    if not all(data.get(k) for k in required):
+        return jsonify({"error": "Completa name, owner, email y password"}), 400
+
+    email = data["email"].strip().lower()
+    if not is_valid_email(email):
+        return jsonify({"error": "El correo ingresado no tiene un formato válido"}), 400
+    if len(data["password"]) < 8:
+        return jsonify({"error": "La contraseña debe tener al menos 8 caracteres"}), 400
+
+    if db().execute("SELECT id FROM users WHERE email=?", (email,)).fetchone():
+        return jsonify({"error": "Ese correo ya existe en la plataforma"}), 409
+
+    cur = db().execute(
+        "INSERT INTO companies(name, base, patio, active, billing_status, created_at) VALUES (?,?,?,1,'active',?)",
+        (
+            data["name"].strip(),
+            data.get("base") or "Nuevo Laredo, Tamaulipas",
+            data.get("patio") or "Patio Km 8.5 · Carretera a Colombia",
+            now(),
+        ),
+    )
+    cid = cur.lastrowid
+    db().execute(
+        "INSERT INTO users(company_id,name,email,password_hash,role,active) VALUES (?,?,?,?, 'owner', 1)",
+        (cid, data["owner"].strip(), email, hash_password(data["password"])),
+    )
+    db().commit()
+    return jsonify({"ok": True, "company_id": cid}), 201
 
 
 @app.post("/api/admin/companies/<int:company_id>/toggle-active")

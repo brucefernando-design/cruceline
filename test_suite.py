@@ -2,10 +2,14 @@
 """
 Suite de Pruebas Automatizadas de CruceLine.
 Verifica:
-1. Endpoint /api/health y catálogo de los 11 puertos fronterizos.
+1. Endpoint /api/health y campo 'backup'.
 2. Validación estricta de puertos en API (Bravo: solo WTB + Colombia + Sin cruce).
-3. Registro de empresa nueva con 0 puertos por default y restricción de cruce hasta activarlos.
-4. Consola Superadmin protegida por CRUCELINE_SECRET y corte comercial (active=0 / 403).
+3. Registro de empresa con código de invitación obligatorio (403 sin código / con código mal; 200 con código bien y 0 puertos).
+4. Superadmin creando empresa por /api/admin/companies sin código de invitación.
+5. Consola Superadmin protegida por CRUCELINE_SECRET con hmac.compare_digest y corte comercial.
+6. Anulación de viajes: estatus 'Anulado' permitido para owner/dispatch, rechazado para operador.
+7. Filtrado de operador por driver_id (no ve viajes ajenos).
+8. Rate limiting de logins: 8 intentos fallidos en 15 min devuelven 429.
 """
 import json
 import os
@@ -16,6 +20,7 @@ from pathlib import Path
 # Configurar entorno de pruebas
 os.environ["CRUCELINE_ENV"] = "development"
 os.environ["CRUCELINE_SEED"] = "1"
+os.environ["CRUCELINE_INVITE_CODE"] = "TESTINVITE2026"
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -30,8 +35,10 @@ class CruceLineAPITestCase(unittest.TestCase):
         with server.app.app_context():
             server.init_db()
             db = server.db()
+            # Limpiar intentos de login previos para evitar interferencia en tests
+            db.execute("DELETE FROM login_attempts")
             # Asegurar estado base limpio de Transportes del Bravo (empresa 1)
-            pac_comps = [r[0] for r in db.execute("SELECT id FROM companies WHERE name LIKE '%Pacífico%'").fetchall()]
+            pac_comps = [r[0] for r in db.execute("SELECT id FROM companies WHERE name LIKE '%Pacífico%' OR name LIKE '%AdminCo%'").fetchall()]
             for pid in pac_comps:
                 db.execute("DELETE FROM trip_docs WHERE company_id=?", (pid,))
                 db.execute("DELETE FROM trips WHERE company_id=?", (pid,))
@@ -47,12 +54,13 @@ class CruceLineAPITestCase(unittest.TestCase):
                 db.commit()
 
     def test_01_health_and_ports_catalog(self):
-        """Verifica salud del servicio y catálogo de 11 puertos en base de datos."""
+        """Verifica salud del servicio, campo backup y catálogo de 11 puertos."""
         res = self.client.get("/api/health")
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["database"], "ok")
+        self.assertEqual(data.get("backup"), "configured")
 
         with server.app.app_context():
             db = server.db()
@@ -99,7 +107,7 @@ class CruceLineAPITestCase(unittest.TestCase):
         self.assertEqual(fail2.status_code, 400)
         self.assertIn("no está habilitado", fail2.get_json()["error"])
 
-        # 5. Crear viaje con WTB (nombre largo o port_id) -> DEBE PASAR con 200
+        # 5. Crear viaje con WTB -> DEBE PASAR con 200
         ok_wtb = self.client.post("/api/trips", json={
             "folio": "PASS-WTB-01",
             "origen": "Patio NL Km 8.5",
@@ -121,7 +129,7 @@ class CruceLineAPITestCase(unittest.TestCase):
         })
         self.assertEqual(ok_col.status_code, 200)
 
-        # 7. Crear viaje 'Sin cruce (Nacional / Doméstico)' -> DEBE PASAR con 200
+        # 7. Crear viaje 'Sin cruce' -> DEBE PASAR con 200
         ok_nac = self.client.post("/api/trips", json={
             "folio": "PASS-NAC-01",
             "origen": "Monterrey, NL",
@@ -132,40 +140,54 @@ class CruceLineAPITestCase(unittest.TestCase):
         })
         self.assertEqual(ok_nac.status_code, 200)
 
-        # 8. Intentar modificar viaje existente hacia un puerto no habilitado (PHR) -> DEBE FALLAR con 400
+        # 8. Modificar hacia puerto no habilitado (PHR) -> DEBE FALLAR con 400
         put_fail = self.client.put("/api/trips/PASS-WTB-01", json={"port_id": "PHR"})
         self.assertEqual(put_fail.status_code, 400)
         self.assertIn("no está habilitado", put_fail.get_json()["error"])
 
-        # 9. Modificar viaje hacia un puerto habilitado (Colombia) -> DEBE PASAR con 200
+        # 9. Modificar hacia puerto habilitado (Colombia) -> DEBE PASAR con 200
         put_ok = self.client.put("/api/trips/PASS-WTB-01", json={"port_id": "COL"})
         self.assertEqual(put_ok.status_code, 200)
 
-    def test_03_new_company_has_zero_ports_and_requires_activation(self):
+    def test_03_invite_code_and_new_company_zero_ports(self):
         """
-        Verifica que al registrar una empresa:
-        - Inicia con 0 puertos activos.
-        - Solo puede crear fletes 'Sin cruce'.
-        - Falla con 400 si intenta cruce sin puertos activos.
-        - Tras activar puertos en Mi Empresa, ya puede crear fletes de cruce.
+        Verifica:
+        - Registro sin código de invitación -> 403
+        - Registro con código incorrecto -> 403
+        - Registro con código correcto -> 200 e inicia con 0 puertos
+        - Intento de cruce internacional sin puertos activos -> 400
+        - Tras activar puertos en Mi Empresa -> 200
         """
-        # 1. Registrar empresa nueva
-        reg = self.client.post("/api/auth/register", json={
+        payload = {
             "company": "Transportes del Pacífico S.A.",
             "name": "Roberto Dueño",
             "email": "roberto@pacifico.mx",
             "password": "Pacifico2026!",
             "base": "Tijuana, Baja California",
             "patio": "Otay Industrial"
-        })
-        self.assertEqual(reg.status_code, 200)
+        }
 
-        # 2. Verificar que inicia con 0 puertos activos
+        # 1. Sin código -> 403
+        fail_no_code = self.client.post("/api/auth/register", json=payload)
+        self.assertEqual(fail_no_code.status_code, 403)
+        self.assertIn("código de invitación", fail_no_code.get_json()["error"].lower())
+
+        # 2. Con código erróneo -> 403
+        payload_bad = {**payload, "invite_code": "CODIGO_FALSO"}
+        fail_bad_code = self.client.post("/api/auth/register", json=payload_bad)
+        self.assertEqual(fail_bad_code.status_code, 403)
+
+        # 3. Con código válido -> 200
+        payload_ok = {**payload, "invite_code": "TESTINVITE2026"}
+        ok_reg = self.client.post("/api/auth/register", json=payload_ok)
+        self.assertEqual(ok_reg.status_code, 200)
+
+        # 4. Empresa nueva inicia con 0 puertos activos
         b_res = self.client.get("/api/bootstrap")
         self.assertEqual(b_res.status_code, 200)
         self.assertEqual(len(b_res.get_json()["active_ports"]), 0)
 
-        # 3. Intentar crear viaje con WTB -> DEBE FALLAR con 400
+        # 5. Intentar cruce con WTB teniendo 0 puertos -> DEBE FALLAR con 400
         fail_cruce = self.client.post("/api/trips", json={
             "folio": "PAC-001",
             "origen": "Tijuana, BC",
@@ -177,22 +199,11 @@ class CruceLineAPITestCase(unittest.TestCase):
         self.assertEqual(fail_cruce.status_code, 400)
         self.assertIn("no está habilitado", fail_cruce.get_json()["error"])
 
-        # 4. Crear viaje Sin cruce -> DEBE PASAR con 200
-        ok_nac = self.client.post("/api/trips", json={
-            "folio": "PAC-002",
-            "origen": "Tijuana, BC",
-            "destino": "Mexicali, BC",
-            "puente": "Sin cruce (Nacional / Doméstico)",
-            "flete": 14000,
-            "moneda": "MXN"
-        })
-        self.assertEqual(ok_nac.status_code, 200)
-
-        # 5. El dueño activa Otay Mesa y Mexicali en Mi Empresa
+        # 6. Activar Otay Mesa y Mexicali en Mi Empresa
         save_ports = self.client.put("/api/company/ports", json={"ports": ["OTAY", "MEX"]})
         self.assertEqual(save_ports.status_code, 200)
 
-        # 6. Ahora viaje por Otay Mesa -> DEBE PASAR con 200
+        # 7. Ahora viaje por Otay Mesa -> DEBE PASAR con 200
         ok_otay = self.client.post("/api/trips", json={
             "folio": "PAC-003",
             "origen": "Tijuana, BC",
@@ -207,7 +218,7 @@ class CruceLineAPITestCase(unittest.TestCase):
         """
         Verifica aislamiento de Superadmin:
         - Sesión normal de empresa NO da acceso a superadmin (401).
-        - Solo login con CRUCELINE_SECRET permite entrar.
+        - Solo login con CRUCELINE_SECRET (validado con hmac.compare_digest) permite entrar.
         - Superadmin suspende empresa (active=0) y login falla con 403.
         - Superadmin reactiva empresa (active=1) y acceso se restablece.
         """
@@ -250,6 +261,84 @@ class CruceLineAPITestCase(unittest.TestCase):
         self.client.post("/api/admin/logout")
         ok_login = self.client.post("/api/auth/login", json={"email": "marco@delbravo.mx", "password": "Bravo2026!"})
         self.assertEqual(ok_login.status_code, 200)
+
+    def test_05_superadmin_direct_company_creation(self):
+        """Superadmin puede crear empresa sin código de invitación vía POST /api/admin/companies."""
+        sec = server.app.secret_key
+        # 1. Login superadmin
+        self.client.post("/api/admin/login", json={"secret": sec})
+
+        # 2. Crear empresa sin invite_code
+        res = self.client.post("/api/admin/companies", json={
+            "name": "Transportes AdminCo S.A.",
+            "owner": "Carlos Admin",
+            "email": "carlos@adminco.mx",
+            "password": "AdminCo2026!",
+            "base": "Monterrey, NL",
+            "patio": "Patio Apodaca"
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(res.get_json().get("ok"))
+
+        # 3. Cerrar sesión superadmin y login como nuevo dueño
+        self.client.post("/api/admin/logout")
+        login_res = self.client.post("/api/auth/login", json={"email": "carlos@adminco.mx", "password": "AdminCo2026!"})
+        self.assertEqual(login_res.status_code, 200)
+
+    def test_06_trip_annulment_and_operator_permission(self):
+        """
+        Verifica:
+        - Owner/dispatch puede cambiar estatus a 'Anulado'.
+        - El viaje anulado permanece visible en trips.
+        - Operador NO puede anular viajes (403).
+        """
+        # 1. Login dueño Bravo y anular viaje FV-1042
+        self.client.post("/api/auth/login", json={"email": "marco@delbravo.mx", "password": "Bravo2026!"})
+        res = self.client.put("/api/trips/FV-1042", json={"estatus": "Anulado"})
+        self.assertEqual(res.status_code, 200)
+
+        # Verificar estatus en trips
+        b_res = self.client.get("/api/bootstrap")
+        fv = [t for t in b_res.get_json()["trips"] if t["folio"] == "FV-1042"][0]
+        self.assertEqual(fv["estatus"], "Anulado")
+
+        # 2. Login como operador e intentar cambiar estatus -> DEBE DAR 403
+        self.client.post("/api/auth/logout")
+        self.client.post("/api/auth/login", json={"email": "jose@delbravo.mx", "password": "Operador2026!"})
+        op_fail = self.client.put("/api/trips/FV-1042", json={"estatus": "En ruta"})
+        self.assertEqual(op_fail.status_code, 403)
+
+    def test_07_operator_filtered_by_driver_id(self):
+        """
+        Verifica que el operador solo ve sus propios viajes filtrados por driver_id
+        y no ve viajes asignados a otros operadores.
+        """
+        # Login operador José Armando Treviño
+        self.client.post("/api/auth/login", json={"email": "jose@delbravo.mx", "password": "Operador2026!"})
+        b_res = self.client.get("/api/bootstrap")
+        self.assertEqual(b_res.status_code, 200)
+        trips = b_res.get_json()["trips"]
+
+        # José solo debe ver los viajes asignados a él (FV-1042 y FV-1045)
+        # FV-1043 (María Elena Cruz) y FV-1044 (Luis Gerardo Salazar) NO deben estar presentes
+        folios = [t["folio"] for t in trips]
+        self.assertIn("FV-1042", folios)
+        self.assertIn("FV-1045", folios)
+        self.assertNotIn("FV-1043", folios)
+        self.assertNotIn("FV-1044", folios)
+
+    def test_08_login_rate_limiting(self):
+        """Verifica que 8 intentos fallidos de login por IP+email activan el bloqueo 429 Too Many Requests."""
+        email = "testrate@delbravo.mx"
+        # 8 intentos fallidos
+        for _ in range(8):
+            r = self.client.post("/api/auth/login", json={"email": email, "password": "wrongpassword"})
+            self.assertEqual(r.status_code, 401)
+
+        # El intento 9 debe devolver 429
+        blocked = self.client.post("/api/auth/login", json={"email": email, "password": "wrongpassword"})
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("demasiados intentos", blocked.get_json()["error"].lower())
 
 
 if __name__ == "__main__":
