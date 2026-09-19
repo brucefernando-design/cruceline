@@ -393,7 +393,7 @@ class CruceLineAPITestCase(unittest.TestCase):
         idx_res = self.client.get("/")
         self.assertEqual(idx_res.status_code, 200)
         idx_html = idx_res.get_data(as_text=True)
-        self.assertIn("support-widget.js?v=20260919c", idx_html)
+        self.assertIn("support-widget.js?v=20260919d", idx_html)
 
 
 if __name__ == "__main__":

@@ -540,7 +540,7 @@ def soporte_chat():
     ip = request.remote_addr or "127.0.0.1"
     if not check_support_rate_limit(ip):
         return jsonify({
-            "error": "Demasiados mensajes. Por favor espera unos minutos o escríbenos por WhatsApp."
+            "error": "Demasiados mensajes. Por favor espera unos minutos antes de intentar de nuevo."
         }), 429
 
     record_support_chat(ip)
@@ -551,7 +551,7 @@ def soporte_chat():
     api_key = os.environ.get("SOPORTE_API_KEY", "").strip()
     if not api_key:
         return jsonify({
-            "reply": "El asistente no está configurado. Escríbenos por WhatsApp.",
+            "reply": "El asistente no está configurado.",
             "configured": False
         }), 200
 
@@ -573,11 +573,11 @@ def soporte_chat():
         "- Ver datos de OTRA empresa\n"
         "- Crear empresas sin código de invitación\n\n"
         "Si preguntan cualquiera de eso, responde EXACTO en espíritu:\n"
-        "\"Eso no lo hace CruceLine. Es despacho de patio y cruces. La factura SAT la sigue sacando tu contador. Si quieres a una persona, WhatsApp.\"\n\n"
+        "\"Eso no lo hace CruceLine. Es despacho de patio y cruces. La factura SAT la sigue sacando tu contador.\"\n\n"
         "REGLAS DE RESPUESTA Y LÍMITES:\n"
         "- NO inventes botones, menús ni módulos que no existan.\n"
-        "- Si no está en el snapshot de la empresa ni en estas reglas, di: \"no lo tengo en pantalla; revisa el menú o WhatsApp\".\n"
-        "- No mandes a WhatsApp para dudas normales (crear viaje, puertos, anular, roles).\n\n"
+        "- Si no está en el snapshot de la empresa ni en estas reglas, di: \"no lo tengo en pantalla; revisa el menú lateral\".\n"
+        "- NUNCA menciones WhatsApp ni digas que contacten a soporte externo. Responde de forma directa, breve y clara sobre la operación de patio.\n\n"
         "Módulos y funciones reales del sistema (menú lateral izquierdo):\n"
         "- Clientes: En 'Clientes' haz clic en '+ Nuevo Cliente' (ingresa nombre, RFC, contacto y teléfono).\n"
         "- Operadores / Choferes: En 'Operadores' haz clic en '+ Nuevo Operador' para registrar nombre, código de chofer (ej. OP-01).\n"
@@ -683,20 +683,20 @@ def soporte_chat():
             if choices and "message" in choices[0]:
                 reply = choices[0]["message"].get("content", "").strip()
             else:
-                reply = "No pude generar respuesta en este momento. Por favor contáctanos por WhatsApp."
+                reply = "No pude generar respuesta en este momento. Por favor intenta más tarde."
             return jsonify({"reply": reply, "configured": True}), 200
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         print(f"[SOPORTE AI ERROR] HTTP {e.code}: {err_body}")
         return jsonify({
-            "reply": "Hubo un inconveniente al consultar el asistente. Escríbenos directamente por WhatsApp.",
+            "reply": "Hubo un inconveniente al consultar el asistente. Intenta de nuevo más tarde.",
             "configured": True,
             "error": f"HTTP {e.code}"
         }), 200
     except Exception as e:
         print(f"[SOPORTE AI ERROR] {e}")
         return jsonify({
-            "reply": "No fue posible conectar con el asistente en este momento. Por favor escríbenos por WhatsApp.",
+            "reply": "No fue posible conectar con el asistente en este momento. Intenta de nuevo más tarde.",
             "configured": True,
             "error": str(e)
         }), 200
