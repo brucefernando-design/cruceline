@@ -494,9 +494,7 @@ def register():
         "INSERT INTO users(company_id,name,email,password_hash,role,active) VALUES (?,?,?,?, 'owner', 1)",
         (cid, data["name"].strip(), email, hash_password(data["password"])),
     )
-    # Por defecto para nueva empresa: activar WTB y Colombia (pueden agregar más en Mi Empresa)
-    db().execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'WTB', 1)", (cid,))
-    db().execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'COL', 1)", (cid,))
+    # Empresa nueva inicia con 0 puertos de cruce activos (el dueño los activa en Mi Empresa)
     db().commit()
 
     user = db().execute(
@@ -720,6 +718,70 @@ def add_client():
     )
 
 
+def validate_and_resolve_port(cid: int, port_raw: str | None) -> tuple[str | None, str | None]:
+    """
+    Valida que el puerto/puente sea 'Sin cruce (Nacional / Doméstico)' o un puerto activo
+    en company_ports para la empresa especificada.
+    Acepta tanto el port_id (OTAY, WTB, COL...) como el nombre largo ("Puente Comercio Mundial (WTB)").
+    Retorna (canonical_name, None) si es válido, o (None, error_msg) si es inválido.
+    """
+    val = (port_raw or "").strip()
+    sin_cruce_options = (
+        "sin cruce",
+        "sin cruce (nacional / doméstico)",
+        "sin cruce (nacional / domestico)",
+        "sin cruce (nacional)",
+        "nacional",
+        "nac",
+        "",
+    )
+    if val.lower() in sin_cruce_options:
+        return "Sin cruce (Nacional / Doméstico)", None
+
+    active_rows = db().execute(
+        """SELECT p.id, p.name FROM ports p
+           JOIN company_ports cp ON cp.port_id = p.id
+           WHERE cp.company_id = ? AND cp.active = 1""",
+        (cid,),
+    ).fetchall()
+
+    active_map = {}
+    for r in active_rows:
+        pid = r["id"].upper()
+        pname = r["name"]
+        active_map[pid] = pname
+        active_map[pname.lower()] = pname
+        if "(" in pname and ")" in pname:
+            tag = pname[pname.find("(") + 1 : pname.find(")")].strip().upper()
+            active_map[tag] = pname
+
+    val_upper = val.upper()
+    val_lower = val.lower()
+    if val_upper in active_map:
+        return active_map[val_upper], None
+    if val_lower in active_map:
+        return active_map[val_lower], None
+
+    global_port = db().execute(
+        "SELECT id, name FROM ports WHERE UPPER(id)=? OR LOWER(name)=? OR name LIKE ?",
+        (val_upper, val_lower, f"%{val}%"),
+    ).fetchone()
+
+    if global_port:
+        return None, (
+            f"El puerto '{global_port['name']}' ({global_port['id']}) no está habilitado para tu empresa. "
+            "Actívalo en 'Mi Empresa & Puertos' antes de asignarlo a una orden de viaje."
+        )
+
+    if len(active_rows) == 0:
+        return None, (
+            "Tu empresa no tiene ningún puerto fronterizo activo. "
+            "Activa tus puertos en 'Mi Empresa & Puertos' o selecciona 'Sin cruce (Nacional / Doméstico)'."
+        )
+
+    return None, f"El puerto o cruce '{val}' no es válido o no está autorizado para tu empresa."
+
+
 @app.post("/api/trips")
 @login_required
 def add_trip():
@@ -742,16 +804,10 @@ def add_trip():
     except ValueError:
         return jsonify({"error": "Monto de flete inválido"}), 400
 
-    puente = (data.get("puente") or "").strip()
-    if not puente:
-        first_port = db().execute(
-            """SELECT p.name FROM ports p
-               JOIN company_ports cp ON cp.port_id = p.id
-               WHERE cp.company_id = ? AND cp.active = 1
-               LIMIT 1""",
-            (cid,),
-        ).fetchone()
-        puente = first_port[0] if first_port else "Sin cruce (Nacional / Doméstico)"
+    port_input = data.get("puente") or data.get("port_id")
+    puente, err = validate_and_resolve_port(cid, port_input)
+    if err:
+        return jsonify({"error": err}), 400
 
     db().execute(
         """INSERT INTO trips(company_id,folio,cliente,origen,destino,puente,equipo,operador,tipo,estatus,flete,moneda,cita,sello)
@@ -797,6 +853,15 @@ def update_trip(folio):
     if request.user["role"] not in ("owner", "dispatch"):
         return jsonify({"error": "Sin permiso"}), 403
     data = request.get_json(force=True)
+    cid = request.user["company_id"]
+
+    if "puente" in data or "port_id" in data:
+        port_input = data.get("puente") or data.get("port_id")
+        puente, err = validate_and_resolve_port(cid, port_input)
+        if err:
+            return jsonify({"error": err}), 400
+        data["puente"] = puente
+
     fields = ["cliente", "origen", "destino", "puente", "equipo", "operador", "tipo", "estatus", "flete", "moneda", "cita", "sello"]
     sets = []
     vals = []
@@ -807,7 +872,7 @@ def update_trip(folio):
     if not sets:
         return jsonify({"error": "No hay campos para actualizar"}), 400
 
-    vals.extend([request.user["company_id"], folio])
+    vals.extend([cid, folio])
     db().execute(f"UPDATE trips SET {','.join(sets)} WHERE company_id=? AND folio=?", vals)
     db().commit()
     return jsonify({"ok": True})
