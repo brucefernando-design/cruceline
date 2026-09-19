@@ -1,0 +1,21 @@
+[Unit]
+Description=CruceLine TMS (aislado)
+After=network.target
+
+[Service]
+Type=simple
+User=cruceline
+Group=cruceline
+WorkingDirectory=/opt/cruceline
+EnvironmentFile=/opt/cruceline/.env
+Environment=CRUCELINE_DB=/opt/cruceline/data/cruceline.db
+ExecStart=/opt/cruceline/.venv/bin/gunicorn --bind 127.0.0.1:5055 --workers 2 --threads 4 --timeout 60 server:app
+Restart=on-failure
+RestartSec=5
+MemoryMax=256M
+CPUQuota=50%
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+# Entornos virtuales
+.venv/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Variables de entorno y secretos
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Base de datos y respaldos
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+backups/
+
+# Maqueta legacy
+legacy_mock/
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

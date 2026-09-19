@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CruceLine · TMS Nacional & Transfronterizo México ⇄ EE.UU.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div id="auth" class="auth-wrap">
+    <div class="card auth-card">
+      <div class="brand" style="padding:0 0 16px">
+        <div class="logo">CL</div>
+        <div>
+          <h1>CruceLine</h1>
+          <p>TMS México ⇄ Estados Unidos</p>
+        </div>
+      </div>
+      <div id="login-box">
+        <h2>Entrar a la línea</h2>
+        <p class="muted">Cada empresa ve exclusivamente sus unidades y viajes.</p>
+        <form id="login-form">
+          <div class="field"><label>Correo</label><input name="email" type="email" required value="marco@delbravo.mx"></div>
+          <div class="field"><label>Contraseña</label><input name="password" type="password" required value="Bravo2026!"></div>
+          <p id="login-error" class="muted" style="color:var(--bad)"></p>
+          <button class="btn" type="submit">Entrar</button>
+          <button class="btn ghost" type="button" id="show-register">Crear empresa</button>
+        </form>
+      </div>
+      <div id="register-box" class="hidden">
+        <h2>Alta de empresa</h2>
+        <p class="muted">Quedas como dueño. Luego invitas despacho, taller y operadores.</p>
+        <form id="register-form">
+          <div class="field"><label>Nombre de la línea / transportista</label><input name="company" required placeholder="Transportes Express..."></div>
+          <div class="field"><label>Tu nombre completo</label><input name="name" required></div>
+          <div class="field"><label>Correo electrónico</label><input name="email" type="email" required></div>
+          <div class="field"><label>Contraseña (mínimo 8 caracteres)</label><input name="password" type="password" required minlength="8"></div>
+          <div class="field"><label>Base de operaciones (ciudad y estado)</label><input name="base" value="Nuevo Laredo, Tamaulipas" placeholder="Ej: Monterrey, NL / Laredo, TX / Querétaro"></div>
+          <div class="field"><label>Patio principal / terminal</label><input name="patio" value="Patio Km 8.5 · Carretera a Colombia" placeholder="Dirección o referencia del patio"></div>
+          <p id="register-error" class="muted" style="color:var(--bad)"></p>
+          <button class="btn" type="submit">Crear y entrar</button>
+          <button class="btn ghost" type="button" id="show-login">Ya tengo cuenta</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">CL</div>
+        <div>
+          <h1>CruceLine</h1>
+          <p id="side-company">México ⇄ EE.UU.</p>
+        </div>
+      </div>
+      <div class="sidebar-scroll">
+        <nav>
+          <button class="nav-btn active" data-view="dashboard">Tablero</button>
+          <button class="nav-btn" data-view="viajes" data-roles="owner,dispatch,operador">Viajes / Fletes</button>
+          <button class="nav-btn" data-view="citas" data-roles="owner,dispatch,operador">Citas & Andenes</button>
+          <button class="nav-btn" data-view="puentes">Puentes & Cruces</button>
+          <button class="nav-btn" data-view="expediente" data-roles="owner,dispatch">Expediente</button>
+          <button class="nav-btn" data-view="cartaporte" data-roles="owner,dispatch">Carta Porte (Borrador)</button>
+          <button class="nav-btn" data-view="flota" data-roles="owner,dispatch,taller">Flota</button>
+          <button class="nav-btn" data-view="operadores" data-roles="owner,dispatch">Operadores</button>
+          <button class="nav-btn" data-view="taller" data-roles="owner,dispatch,taller">Taller</button>
+          <button class="nav-btn" data-view="clientes" data-roles="owner,dispatch">Clientes</button>
+          <button class="nav-btn" data-view="dinero" data-roles="owner,dispatch">Liquidación</button>
+          <button class="nav-btn" data-view="empresa" data-roles="owner">Mi Empresa</button>
+          <button class="nav-btn" data-view="equipo" data-roles="owner">Usuarios</button>
+          <button class="nav-btn" data-view="terminos">Términos del Piloto</button>
+        </nav>
+      </div>
+      <div class="footer-note">
+        <p id="whoami" style="margin:0 0 6px"></p>
+        <button class="btn secondary" id="logout" style="width:100%">Salir</button>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="legal-banner">
+        <span>⚠️ <b>Aviso Operativo de Piloto:</b> CruceLine es una plataforma de despacho y control logístico. <u>No emite timbrado oficial CFDI / Carta Porte 3.1 SAT</u> ni sustituye trámites de aduana o brokers.</span>
+        <button class="btn ghost sm" id="banner-terms-btn">Ver Términos</button>
+      </div>
+      <div id="view"></div>
+    </main>
+  </div>
+  <div id="modals"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
