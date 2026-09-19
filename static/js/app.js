@@ -2,15 +2,6 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const STATUSES = ["Cotizado", "Asignado", "En ruta", "En frontera", "Entregado", "Liquidado"];
-const PUENTES = [
-  "Comercio Mundial (WTB)",
-  "Colombia Solidaridad",
-  "Pharr - Reynosa",
-  "Zaragoza - Cd. Juárez",
-  "Otay Mesa (Tijuana)",
-  "Sin cruce (Nacional / Doméstico)",
-  "Otro cruce",
-];
 const TRIP_TYPES = [
   "Trailer transfer (Frontera)",
   "Internacional MX → USA (FTL)",
@@ -32,9 +23,12 @@ let state = {
   money: [],
   workorders: [],
   docs: {},
+  active_ports: [],
+  all_ports: [],
   bridges: [],
 };
 let currentView = "dashboard";
+let isSuperadminMode = false;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -105,6 +99,8 @@ function statusBadge(s) {
     operador: "info",
     Activo: "ok",
     Inactivo: "bad",
+    Activa: "ok",
+    Suspendida: "bad",
   };
   return `<span class="badge ${map[s] || "info"}">${s}</span>`;
 }
@@ -122,6 +118,7 @@ async function loadApp() {
   $("#whoami").innerHTML = `<b>${state.user.name}</b><br><small class="muted">${state.user.role.toUpperCase()} · ${state.user.billing_status.toUpperCase()}</small>`;
 
   $$(".nav-btn").forEach((b) => {
+    if (b.dataset.view === "superadmin") return;
     const roles = b.dataset.roles ? b.dataset.roles.split(",") : null;
     b.classList.toggle("hidden", !can(roles));
   });
@@ -149,6 +146,7 @@ const views = {
   empresa: renderEmpresa,
   equipo: renderEquipo,
   terminos: renderTerminos,
+  superadmin: renderSuperadmin,
 };
 
 function render() {
@@ -187,7 +185,7 @@ function renderDashboard() {
       </div>
     </div>
     <div class="grid kpis">
-      <div class="card kpi"><span>Viajes Activos</span><strong>${enCurso}</strong><small>Nacional, frontera o EE.UU.</small></div>
+      <div class="card kpi"><span>Viajes Activos</span><strong>${enCurso}</strong><small>En ruta o frontera</small></div>
       <div class="card kpi">
         <span>Cartera por Cobrar</span>
         <strong>${money(porCobrarMXN, "MXN")}</strong>
@@ -199,7 +197,7 @@ function renderDashboard() {
     <div class="card" style="margin-top:14px">
       <h3>Viajes y Fletes en Tránsito</h3>
       <table>
-        <thead><tr><th>Folio</th><th>Ruta / Tipo</th><th>Cruce / Puente</th><th>Operador / Equipo</th><th>Flete</th><th>Estatus</th></tr></thead>
+        <thead><tr><th>Folio</th><th>Ruta / Tipo</th><th>Cruce / Puerto</th><th>Operador / Equipo</th><th>Flete</th><th>Estatus</th></tr></thead>
         <tbody>
           ${
             state.trips.filter((t) => !["Entregado", "Liquidado"].includes(t.estatus)).map(
@@ -305,7 +303,7 @@ function renderViajes() {
     <div class="top">
       <div>
         <h2>Viajes y Fletes</h2>
-        <p>Rutas nacionales (México), cruce fronterizo transfer e internacionales puerta a puerta.</p>
+        <p>Órdenes de flete nacional, transfer fronterizo e internacional.</p>
       </div>
       ${can(["owner", "dispatch"]) ? `<button class="btn" id="add-trip">Nueva orden de flete</button>` : ""}
     </div>
@@ -335,12 +333,19 @@ function renderViajes() {
 }
 
 function tripModal(trip) {
+  // El combo respeta ESTRICTAMENTE los puertos activos de la empresa
+  const activePortNames = (state.active_ports && state.active_ports.length > 0)
+    ? state.active_ports.map((p) => p.name)
+    : ["Puente Comercio Mundial (WTB)", "Puente Colombia Solidaridad"];
+
+  const portOptions = [...activePortNames, "Sin cruce (Nacional / Doméstico)"];
+
   const t = trip || {
     folio: "",
     cliente: state.clients[0]?.nombre || "",
     origen: state.user.base || "Nuevo Laredo, Tamaulipas",
     destino: "Laredo, TX",
-    puente: "Comercio Mundial (WTB)",
+    puente: portOptions[0],
     equipo: state.units[0]?.code || "",
     operador: state.drivers[0]?.nombre || "",
     tipo: "Trailer transfer (Frontera)",
@@ -355,7 +360,7 @@ function tripModal(trip) {
       <div class="top">
         <div>
           <h2>${trip ? "Viaje " + t.folio : "Nueva Orden de Flete"}</h2>
-          <p>Flete nacional o internacional México ⇄ Estados Unidos</p>
+          <p>Flete nacional o cruce fronterizo</p>
         </div>
         <button class="btn ghost" id="close-modal">Cerrar</button>
       </div>
@@ -364,7 +369,9 @@ function tripModal(trip) {
         <div class="field"><label>Estatus</label><select name="estatus">${STATUSES.map((s) => `<option ${s === t.estatus ? "selected" : ""}>${s}</option>`).join("")}</select></div>
         <div class="field"><label>Cliente / Broker</label><select name="cliente">${state.clients.map((c) => `<option ${c.nombre === t.cliente ? "selected" : ""}>${c.nombre}</option>`).join("")}</select></div>
         <div class="field"><label>Tipo de Flete / Modalidad</label><select name="tipo">${TRIP_TYPES.map((x) => `<option ${x === t.tipo ? "selected" : ""}>${x}</option>`).join("")}</select></div>
-        <div class="field"><label>Cruce / Puerto Fronterizo</label><select name="puente">${PUENTES.map((x) => `<option ${x === (t.puente || "Comercio Mundial (WTB)") ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+        <div class="field"><label>Cruce / Puerto Habilitado</label>
+          <select name="puente">${portOptions.map((x) => `<option ${x === (t.puente || portOptions[0]) ? "selected" : ""}>${x}</option>`).join("")}</select>
+        </div>
         <div class="field"><label>Moneda</label><select name="moneda">${CURRENCIES.map((m) => `<option ${m === (t.moneda || "MXN") ? "selected" : ""}>${m}</option>`).join("")}</select></div>
         <div class="field"><label>Origen (Ciudad, Estado o Patio)</label><input name="origen" value="${t.origen || ""}" required placeholder="Ej: Patio NL Km 8.5 / Monterrey / CDMX"></div>
         <div class="field"><label>Destino (Ciudad, Estado o Bodega)</label><input name="destino" value="${t.destino || ""}" required placeholder="Ej: Laredo TX / San Antonio / Guadalajara"></div>
@@ -506,7 +513,7 @@ function renderCartaPorte() {
     <div class="top">
       <div>
         <h2>Borrador de Carta Porte Operativa</h2>
-        <p>Generación de datos de transporte. Este formato es un borrador operativo interno para el operador y no sustituye el timbrado oficial CFDI con PAC.</p>
+        <p>Generación de datos de transporte. Formato operativo interno para el operador y patio (no timbrado fiscal PAC).</p>
       </div>
       <button class="btn" id="print-cp">Imprimir Borrador</button>
     </div>
@@ -528,50 +535,80 @@ function renderCartaPorte() {
 }
 
 function renderPuentes() {
+  const activeIds = new Set((state.active_ports || []).map((p) => p.id));
   return `
     <div class="top">
       <div>
-        <h2>Puentes y Puertos de Cruce Fronterizo</h2>
-        <p>Principales cruces terrestres México ⇄ Estados Unidos y modalidades de tránsito nacional.</p>
+        <h2>Puertos de Cruce Fronterizo</h2>
+        <p>Puertos autorizados para tu línea. Activa o desactiva puertos en la pestaña <b>Mi Empresa</b>.</p>
       </div>
     </div>
     <div class="grid three">
-      ${(state.bridges || [])
-        .map(
-          (b) => `
-        <div class="card">
+      ${(state.all_ports || state.active_ports || [])
+        .map((b) => {
+          const isActive = activeIds.has(b.id);
+          return `
+        <div class="card" style="border-color:${isActive ? "rgba(61,214,140,.35)" : "var(--line)"}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <h3 style="margin:0 0 6px">${b.nombre}</h3>
-            <span class="badge info">${b.id}</span>
+            <h3 style="margin:0 0 6px">${b.name}</h3>
+            <span class="badge ${isActive ? "ok" : "muted"}">${isActive ? "Activo en tu línea" : "No asignado"}</span>
           </div>
-          <p style="font-size:12.5px;color:var(--accent);margin:2px 0 8px"><b>${b.ladoMx}</b> ⇄ <b>${b.ladoUs}</b></p>
-          <p>${statusBadge(b.uso)}</p>
+          <p style="font-size:12.5px;color:var(--accent);margin:2px 0 8px"><b>${b.lado_mx}</b> ⇄ <b>${b.lado_us}</b></p>
           <p class="muted" style="font-size:12px">${b.nota}</p>
-        </div>`
-        )
+        </div>`;
+        })
         .join("")}
     </div>`;
 }
 
 function renderEmpresa() {
   const u = state.user;
+  const activeIds = new Set((state.active_ports || []).map((p) => p.id));
+
   return `
     <div class="top">
       <div>
-        <h2>Datos de Mi Empresa</h2>
-        <p>Configuración general de la línea de transporte, terminales y patios de maniobra.</p>
+        <h2>Datos de Mi Empresa & Puertos Autorizados</h2>
+        <p>Configura los datos de tu línea de transporte y selecciona qué puertos fronterizos opera tu empresa.</p>
       </div>
     </div>
-    <div class="card" style="max-width:700px">
-      <form id="company-form" class="form-grid">
-        <div class="field full"><label>Razón Social / Nombre de la Línea</label><input name="name" value="${u.company}" required></div>
-        <div class="field full"><label>Base de Operaciones (Ciudad y Estado)</label><input name="base" value="${u.base || ""}" placeholder="Ej: Nuevo Laredo, Tamaulipas / Monterrey, NL / Laredo, TX" required></div>
-        <div class="field full"><label>Patio Principal / Dirección de Maniobras</label><input name="patio" value="${u.patio || ""}" placeholder="Ej: Carretera Nacional Km 14 / Patio Colombia"></div>
-        <div class="field"><label>Estatus Comercial de la Cuenta</label><input value="${(u.billing_status || "trial").toUpperCase()} - ${u.company_active ? "ACTIVA" : "SUSPENDIDA"}" readonly></div>
-        <div class="full" style="margin-top:10px">
-          <button class="btn" type="submit">Actualizar Datos de Empresa</button>
-        </div>
-      </form>
+    <div class="grid two">
+      <div class="card">
+        <h3>Datos de la Línea</h3>
+        <form id="company-form" class="form-grid" style="margin-top:14px">
+          <div class="field full"><label>Razón Social / Nombre de la Línea</label><input name="name" value="${u.company}" required></div>
+          <div class="field full"><label>Base de Operaciones (Ciudad y Estado)</label><input name="base" value="${u.base || ""}" placeholder="Ej: Nuevo Laredo / Monterrey / Laredo TX" required></div>
+          <div class="field full"><label>Patio Principal / Dirección de Maniobras</label><input name="patio" value="${u.patio || ""}" placeholder="Ej: Carretera Nacional Km 14 / Patio Colombia"></div>
+          <div class="field full"><label>Estatus Comercial de la Cuenta</label><input value="${(u.billing_status || "trial").toUpperCase()} - ${u.company_active ? "ACTIVA" : "SUSPENDIDA"}" readonly></div>
+          <div class="full" style="margin-top:10px">
+            <button class="btn" type="submit">Actualizar Datos de Empresa</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Puertos de Cruce Autorizados</h3>
+        <p class="muted" style="font-size:12.5px;margin-bottom:12px">Solo los puertos marcados aparecerán en el selector de órdenes de viaje.</p>
+        <form id="ports-form">
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;padding-right:6px">
+            ${(state.all_ports || [])
+              .map(
+                (p) => `
+              <label class="doc" style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <b>${p.name}</b>
+                  <div class="muted" style="font-size:11px">${p.lado_mx} ⇄ ${p.lado_us}</div>
+                </div>
+                <input type="checkbox" name="port_${p.id}" value="${p.id}" ${activeIds.has(p.id) ? "checked" : ""}>
+              </label>`
+              )
+              .join("")}
+          </div>
+          <div style="margin-top:14px">
+            <button class="btn" type="submit">Guardar Puertos de la Línea</button>
+          </div>
+        </form>
+      </div>
     </div>`;
 }
 
@@ -595,12 +632,12 @@ function renderTerminos() {
     <div class="top">
       <div>
         <h2>Términos y Deslinde Legal del Piloto CruceLine</h2>
-        <p>Condiciones de uso aplicables para la etapa de piloto comercial de pago.</p>
+        <p>Condiciones operativas aplicables para la etapa de piloto comercial de pago.</p>
       </div>
     </div>
     <div class="card terms-content" style="max-width:850px">
       <h3>1. Naturaleza del Software (Piloto Operativo)</h3>
-      <p>CruceLine es una solución tecnológica especializada en la gestión operativa, despacho de fletes, control de mantenimiento y trazabilidad documental para empresas de autotransporte de carga en México y Estados Unidos.</p>
+      <p>CruceLine es una solución especializada en el despacho de fletes, control de flota, seguimiento de mantenimiento y trazabilidad documental para empresas de transporte en México y EE.UU.</p>
 
       <h3>2. Deslinde Fiscal y Tributario (Carta Porte / CFDI SAT)</h3>
       <p><b>CruceLine no emite timbrado fiscal ni sustituye la obligación de generar el Comprobante Fiscal Digital por Internet (CFDI) con Complemento Carta Porte 3.1</b> a través de un Proveedor Autorizado de Certificación (PAC) del SAT. Todos los borradores e impresiones emitidos por la plataforma tienen carácter estrictamente operativo y de control interno.</p>
@@ -612,6 +649,123 @@ function renderTerminos() {
       <p>El periodo de piloto tiene una tarifa preferencial acordada. El acceso al sistema está sujeto al pago puntual de la mensualidad o suscripción del piloto. En caso de suspensión por falta de pago, el dueño de la empresa podrá solicitar el respaldo íntegro de su base de datos en formato JSON mediante soporte técnico.</p>
     </div>`;
 }
+
+// =====================================================================
+// Vista y Pantalla Superadmin
+// =====================================================================
+function renderSuperadmin() {
+  if (!isSuperadminMode) {
+    return `
+      <div class="top">
+        <div>
+          <h2>Consola Superadmin CruceLine</h2>
+          <p>Acceso exclusivo para administración maestra y corte por falta de pago.</p>
+        </div>
+      </div>
+      <div class="card" style="max-width:480px;margin:20px 0">
+        <h3>Autenticación Maestra</h3>
+        <p class="muted" style="margin-bottom:14px">Ingresa la clave secreta <code>CRUCELINE_SECRET</code> configurada en el servidor:</p>
+        <form id="admin-auth-form">
+          <div class="field"><label>Clave Maestra</label><input type="password" id="admin-secret-input" required placeholder="CRUCELINE_SECRET"></div>
+          <p id="admin-auth-error" class="muted" style="color:var(--bad)"></p>
+          <button class="btn danger" type="submit">Ingresar a Consola</button>
+        </form>
+      </div>`;
+  }
+
+  return `
+    <div class="top">
+      <div>
+        <h2>Consola Superadministrador</h2>
+        <p>Control maestro de empresas de transporte, estado de pago y corte de servicio (active=0).</p>
+      </div>
+      <button class="btn ghost" id="btn-admin-logout">Cerrar Sesión Superadmin</button>
+    </div>
+    <div id="admin-companies-container"><p class="muted">Cargando empresas...</p></div>`;
+}
+
+async function loadSuperadminCompanies() {
+  try {
+    const list = await api("/api/admin/companies");
+    const container = $("#admin-companies-container");
+    if (!container) return;
+
+    const total = list.length;
+    const activas = list.filter((c) => c.active === 1).length;
+    const suspendidas = total - activas;
+
+    container.innerHTML = `
+      <div class="grid three" style="margin-bottom:18px">
+        <div class="card kpi"><span>Total Empresas</span><strong>${total}</strong><small>Líneas registradas</small></div>
+        <div class="card kpi"><span>Empresas Activas</span><strong>${activas}</strong><small>Con acceso al sistema</small></div>
+        <div class="card kpi"><span>Empresas Suspendidas</span><strong style="color:var(--bad)">${suspendidas}</strong><small>Corte por falta de pago</small></div>
+      </div>
+      <div class="card">
+        <h3>Empresas en la Plataforma</h3>
+        <table>
+          <thead><tr><th>ID</th><th>Línea / Razón Social</th><th>Base y Patio</th><th>Fecha Alta</th><th>Viajes</th><th>Usuarios</th><th>Estatus</th><th>Facturación</th><th>Acciones de Corte</th></tr></thead>
+          <tbody>
+            ${list
+              .map(
+                (c) => `
+              <tr>
+                <td><b>#${c.id}</b></td>
+                <td><b>${c.name}</b></td>
+                <td>${c.base}<div class="muted" style="font-size:11px">${c.patio || "—"}</div></td>
+                <td>${c.created_at || "—"}</td>
+                <td>${c.total_trips}</td>
+                <td>${c.total_users}</td>
+                <td>${statusBadge(c.active ? "Activa" : "Suspendida")}</td>
+                <td>
+                  <select onchange="changeCompanyBilling(${c.id}, this.value)" style="padding:4px 8px;font-size:11.5px">
+                    <option value="trial" ${c.billing_status === "trial" ? "selected" : ""}>Trial / Piloto</option>
+                    <option value="active" ${c.billing_status === "active" ? "selected" : ""}>Al corriente (Paid)</option>
+                    <option value="suspended" ${c.billing_status === "suspended" ? "selected" : ""}>Suspendida (Impago)</option>
+                  </select>
+                </td>
+                <td>
+                  <button class="btn sm ${c.active ? "danger" : "ok"}" onclick="toggleCompanyActive(${c.id}, ${c.active ? 0 : 1})">
+                    ${c.active ? "Suspender (active=0)" : "Reactivar (active=1)"}
+                  </button>
+                </td>
+              </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (err) {
+    if ($("#admin-companies-container")) {
+      $("#admin-companies-container").innerHTML = `<div class="card" style="color:var(--bad)">${err.message}</div>`;
+    }
+  }
+}
+
+window.toggleCompanyActive = async (cid, newActive) => {
+  const actionText = newActive ? "reactivar" : "suspender el acceso por impago (active=0)";
+  if (!confirm(`¿Confirmas que deseas ${actionText} a la empresa #${cid}?`)) return;
+  try {
+    await api(`/api/admin/companies/${cid}/status`, {
+      method: "POST",
+      body: { active: newActive, billing_status: newActive ? "active" : "suspended" },
+    });
+    await loadSuperadminCompanies();
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+window.changeCompanyBilling = async (cid, newStatus) => {
+  try {
+    await api(`/api/admin/companies/${cid}/status`, {
+      method: "POST",
+      body: { billing_status: newStatus, active: newStatus !== "suspended" },
+    });
+    await loadSuperadminCompanies();
+  } catch (err) {
+    alert(err.message);
+  }
+};
 
 function promptAdd(title, fields, onSave) {
   $("#modals").innerHTML = `
@@ -809,8 +963,45 @@ function bindViewEvents() {
     };
   }
 
+  if ($("#ports-form")) {
+    $("#ports-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const checkedPorts = $$("#ports-form input[type=checkbox]:checked").map((cb) => cb.value);
+      try {
+        await api("/api/company/ports", { method: "PUT", body: { ports: checkedPorts } });
+        alert("Puertos actualizados. Solo los puertos seleccionados aparecerán en las órdenes de flete.");
+        await loadApp();
+        go("empresa");
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  }
+
   if ($("#banner-terms-btn")) {
     $("#banner-terms-btn").onclick = () => go("terminos");
+  }
+
+  if ($("#admin-auth-form")) {
+    $("#admin-auth-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const secret = $("#admin-secret-input").value;
+      try {
+        await api("/api/admin/login", { method: "POST", body: { secret } });
+        isSuperadminMode = true;
+        render();
+      } catch (err) {
+        $("#admin-auth-error").textContent = err.message;
+      }
+    };
+  }
+
+  if ($("#btn-admin-logout")) {
+    $("#btn-admin-logout").onclick = async () => {
+      await api("/api/admin/logout", { method: "POST", body: {} });
+      isSuperadminMode = false;
+      go("dashboard");
+    };
   }
 
   if ($("#add-user")) {
@@ -860,6 +1051,10 @@ function bindViewEvents() {
         $("#users-table").textContent = err.message;
       });
   }
+
+  if (currentView === "superadmin" && isSuperadminMode) {
+    loadSuperadminCompanies();
+  }
 }
 
 window.resetUserPw = (userId, name) => {
@@ -880,12 +1075,44 @@ window.toggleUser = (userId) => {
 document.addEventListener("DOMContentLoaded", async () => {
   $("#show-register").onclick = () => {
     $("#login-box").classList.add("hidden");
+    $("#superadmin-box").classList.add("hidden");
     $("#register-box").classList.remove("hidden");
   };
   $("#show-login").onclick = () => {
     $("#register-box").classList.add("hidden");
+    $("#superadmin-box").classList.add("hidden");
     $("#login-box").classList.remove("hidden");
   };
+  $("#show-login-from-admin").onclick = () => {
+    $("#superadmin-box").classList.add("hidden");
+    $("#register-box").classList.add("hidden");
+    $("#login-box").classList.remove("hidden");
+  };
+  $("#show-superadmin").onclick = () => {
+    $("#login-box").classList.add("hidden");
+    $("#register-box").classList.add("hidden");
+    $("#superadmin-box").classList.remove("hidden");
+  };
+
+  $("#superadmin-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/admin/login", { method: "POST", body: data });
+      isSuperadminMode = true;
+      // Load app in superadmin view
+      try {
+        await loadApp();
+      } catch {
+        $("#auth").classList.add("hidden");
+        $("#app").classList.remove("hidden");
+      }
+      go("superadmin");
+    } catch (err) {
+      $("#superadmin-error").textContent = err.message;
+    }
+  };
+
   $("#login-form").onsubmit = async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
@@ -913,9 +1140,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   $$(".nav-btn").forEach((b) => (b.onclick = () => go(b.dataset.view)));
 
   try {
+    const adminStatus = await api("/api/admin/check").catch(() => ({}));
+    if (adminStatus.is_superadmin) {
+      isSuperadminMode = true;
+    }
+  } catch {
+    /* Ignore */
+  }
+
+  try {
     await api("/api/me");
     await loadApp();
   } catch {
-    /* Muestra pantalla de login */
+    /* Muestra login */
   }
 });

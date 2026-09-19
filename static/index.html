@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CruceLine · TMS Nacional & Transfronterizo México ⇄ EE.UU.</title>
+  <title>CruceLine · TMS de Fletes y Cruces Fronterizos México ⇄ EE.UU.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/styles.css" />
@@ -22,11 +22,14 @@
         <h2>Entrar a la línea</h2>
         <p class="muted">Cada empresa ve exclusivamente sus unidades y viajes.</p>
         <form id="login-form">
-          <div class="field"><label>Correo</label><input name="email" type="email" required value="marco@delbravo.mx"></div>
-          <div class="field"><label>Contraseña</label><input name="password" type="password" required value="Bravo2026!"></div>
+          <div class="field"><label>Correo</label><input name="email" type="email" required placeholder="tu-correo@empresa.mx"></div>
+          <div class="field"><label>Contraseña</label><input name="password" type="password" required placeholder="••••••••"></div>
           <p id="login-error" class="muted" style="color:var(--bad)"></p>
           <button class="btn" type="submit">Entrar</button>
           <button class="btn ghost" type="button" id="show-register">Crear empresa</button>
+          <div style="text-align:center;margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
+            <button class="btn ghost sm" type="button" id="show-superadmin" style="font-size:11.5px">Acceso Superadmin CruceLine</button>
+          </div>
         </form>
       </div>
       <div id="register-box" class="hidden">
@@ -34,14 +37,24 @@
         <p class="muted">Quedas como dueño. Luego invitas despacho, taller y operadores.</p>
         <form id="register-form">
           <div class="field"><label>Nombre de la línea / transportista</label><input name="company" required placeholder="Transportes Express..."></div>
-          <div class="field"><label>Tu nombre completo</label><input name="name" required></div>
-          <div class="field"><label>Correo electrónico</label><input name="email" type="email" required></div>
+          <div class="field"><label>Tu nombre completo</label><input name="name" required placeholder="Nombre del responsable"></div>
+          <div class="field"><label>Correo electrónico</label><input name="email" type="email" required placeholder="dueno@transportes.com"></div>
           <div class="field"><label>Contraseña (mínimo 8 caracteres)</label><input name="password" type="password" required minlength="8"></div>
-          <div class="field"><label>Base de operaciones (ciudad y estado)</label><input name="base" value="Nuevo Laredo, Tamaulipas" placeholder="Ej: Monterrey, NL / Laredo, TX / Querétaro"></div>
+          <div class="field"><label>Base de operaciones (ciudad y estado)</label><input name="base" value="Nuevo Laredo, Tamaulipas" placeholder="Ej: Nuevo Laredo / Monterrey / Laredo TX"></div>
           <div class="field"><label>Patio principal / terminal</label><input name="patio" value="Patio Km 8.5 · Carretera a Colombia" placeholder="Dirección o referencia del patio"></div>
           <p id="register-error" class="muted" style="color:var(--bad)"></p>
           <button class="btn" type="submit">Crear y entrar</button>
           <button class="btn ghost" type="button" id="show-login">Ya tengo cuenta</button>
+        </form>
+      </div>
+      <div id="superadmin-box" class="hidden">
+        <h2>Consola Superadmin</h2>
+        <p class="muted">Gestión maestra de empresas y corte de servicio por impago.</p>
+        <form id="superadmin-form">
+          <div class="field"><label>Clave Maestra (CRUCELINE_SECRET)</label><input name="secret" type="password" required placeholder="Clave de superadmin"></div>
+          <p id="superadmin-error" class="muted" style="color:var(--bad)"></p>
+          <button class="btn danger" type="submit">Entrar a Superadmin</button>
+          <button class="btn ghost" type="button" id="show-login-from-admin">Volver al login de empresa</button>
         </form>
       </div>
     </div>
@@ -61,7 +74,7 @@
           <button class="nav-btn active" data-view="dashboard">Tablero</button>
           <button class="nav-btn" data-view="viajes" data-roles="owner,dispatch,operador">Viajes / Fletes</button>
           <button class="nav-btn" data-view="citas" data-roles="owner,dispatch,operador">Citas & Andenes</button>
-          <button class="nav-btn" data-view="puentes">Puentes & Cruces</button>
+          <button class="nav-btn" data-view="puentes">Puertos de Cruce</button>
           <button class="nav-btn" data-view="expediente" data-roles="owner,dispatch">Expediente</button>
           <button class="nav-btn" data-view="cartaporte" data-roles="owner,dispatch">Carta Porte (Borrador)</button>
           <button class="nav-btn" data-view="flota" data-roles="owner,dispatch,taller">Flota</button>
@@ -69,9 +82,10 @@
           <button class="nav-btn" data-view="taller" data-roles="owner,dispatch,taller">Taller</button>
           <button class="nav-btn" data-view="clientes" data-roles="owner,dispatch">Clientes</button>
           <button class="nav-btn" data-view="dinero" data-roles="owner,dispatch">Liquidación</button>
-          <button class="nav-btn" data-view="empresa" data-roles="owner">Mi Empresa</button>
+          <button class="nav-btn" data-view="empresa" data-roles="owner">Mi Empresa & Puertos</button>
           <button class="nav-btn" data-view="equipo" data-roles="owner">Usuarios</button>
           <button class="nav-btn" data-view="terminos">Términos del Piloto</button>
+          <button class="nav-btn" data-view="superadmin" id="btn-nav-superadmin" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px;color:var(--accent)">🛡️ Superadmin</button>
         </nav>
       </div>
       <div class="footer-note">

@@ -35,6 +35,20 @@ app.config["SESSION_COOKIE_NAME"] = "cruceline_session"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("CRUCELINE_HTTPS", "0") == "1"
 app.config["SESSION_COOKIE_PATH"] = "/"
 
+BORDER_PORTS = [
+    ("OTAY", "Garita Otay Mesa", "Tijuana, BC", "San Diego, CA", "Carga comercial", "Principal cruce comercial del noroeste hacia California."),
+    ("MEX", "Garita Mexicali II (Nuevo Mexicali)", "Mexicali, BC", "Calexico East, CA", "Carga comercial", "Acceso comercial para el Valle Imperial y Mexicali."),
+    ("NOG", "Puente Nogales Mariposa", "Nogales, SON", "Nogales, AZ", "Carga perecederos e industrial", "Corredor principal de hortalizas y manufactura de Sonora."),
+    ("STER", "Cruce San Jerónimo - Santa Teresa", "San Jerónimo, CHIH", "Santa Teresa, NM", "Carga sobredimensionada e industrial", "Acceso ágil evitando el área urbana de El Paso."),
+    ("ZAR", "Puente Zaragoza (Ysleta–Zaragoza)", "Cd. Juárez, CHIH", "El Paso, TX", "Carga maquiladora", "Principal cruce comercial de Ciudad Juárez hacia Texas."),
+    ("EP", "Puente Camino Real (Eagle Pass II)", "Piedras Negras, COAH", "Eagle Pass, TX", "Carga pesada y transfer", "Cruce comercial clave para Coahuila y el centro de Texas."),
+    ("WTB", "Puente Comercio Mundial (WTB)", "Nuevo Laredo, TAMPS", "Laredo, TX", "Carga pesada / trailers 53'", "Mayor puerto terrestre de carga en el continente."),
+    ("COL", "Puente Colombia Solidaridad", "Anáhuac, NL", "Laredo, TX", "Carga / trailers y transfer", "Ruta alterna ágil conectada directamente con Nuevo León."),
+    ("PHR", "Puente Internacional Pharr–Reynosa", "Reynosa, TAMPS", "Pharr, TX", "Carga comercial y perecederos", "Cruce clave para la industria maquiladora de Reynosa y Valle de Texas."),
+    ("BRO", "Puente Los Indios / Veteranos (Brownsville)", "Matamoros, TAMPS", "Brownsville, TX", "Carga industrial y marítima", "Conexión comercial cercana al Golfo de México y puerto de Brownsville."),
+    ("DELRIO", "Puente Internacional Acuña–Del Rio", "Cd. Acuña, COAH", "Del Rio, TX", "Carga y manufactura", "Cruce fronterizo para la región norte de Coahuila y Del Rio."),
+]
+
 
 def db() -> sqlite3.Connection:
     if "db" not in g:
@@ -193,6 +207,20 @@ def init_db():
             name TEXT NOT NULL,
             ok INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS ports (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            lado_mx TEXT NOT NULL,
+            lado_us TEXT NOT NULL,
+            uso TEXT,
+            nota TEXT
+        );
+        CREATE TABLE IF NOT EXISTS company_ports (
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            port_id TEXT NOT NULL REFERENCES ports(id),
+            active INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (company_id, port_id)
+        );
         """
     )
     # Migraciones seguras para bases de datos existentes
@@ -200,7 +228,24 @@ def init_db():
     ensure_column(conn, "companies", "billing_status", "TEXT NOT NULL DEFAULT 'trial'")
     ensure_column(conn, "trips", "moneda", "TEXT NOT NULL DEFAULT 'MXN'")
     ensure_column(conn, "money", "moneda", "TEXT NOT NULL DEFAULT 'MXN'")
+
+    # Semilla de los 11 puertos de cruce autorizados
+    for p in BORDER_PORTS:
+        conn.execute(
+            "INSERT OR REPLACE INTO ports(id, name, lado_mx, lado_us, uso, nota) VALUES (?,?,?,?,?,?)",
+            p,
+        )
+
     conn.commit()
+
+    # Asegurar que si la empresa demo Transportes del Bravo existe, active solo WTB + Colombia
+    bravo = conn.execute("SELECT id FROM companies WHERE name LIKE '%Bravo%'").fetchone()
+    if bravo:
+        bid = bravo[0]
+        if conn.execute("SELECT COUNT(*) FROM company_ports WHERE company_id=?", (bid,)).fetchone()[0] == 0:
+            conn.execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'WTB', 1)", (bid,))
+            conn.execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'COL', 1)", (bid,))
+            conn.commit()
 
     seed_env = os.environ.get("CRUCELINE_SEED")
     should_seed = seed_env == "1" if seed_env is not None else (ENV_MODE != "production")
@@ -222,6 +267,10 @@ def seed(conn: sqlite3.Connection):
         ),
     )
     cid = cur.lastrowid
+    # Para Bravo: solo WTB y Colombia activos
+    conn.execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'WTB', 1)", (cid,))
+    conn.execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'COL', 1)", (cid,))
+
     users = [
         ("Marco Dueño", "marco@delbravo.mx", "Bravo2026!", "owner"),
         ("Ana Despacho", "despacho@delbravo.mx", "Despacho2026!", "dispatch"),
@@ -261,7 +310,7 @@ def seed(conn: sqlite3.Connection):
         )
     clients = [
         ("CL-01", "Rio Grande Transfer LLC", "— / EIN 74-118902", "30 días", "Comercio Mundial"),
-        ("CL-02", "Industrias del Norte SA de CV", "INO980214AB3", "15 días", "Colombia / WTB / Pharr"),
+        ("CL-02", "Industrias del Norte SA de CV", "INO980214AB3", "15 días", "Colombia / WTB"),
         ("CL-03", "Laredo Bonded Warehouses", "— / EIN 74-330221", "7 días", "Comercio Mundial"),
         ("CL-04", "Logística Nacional del Centro SC", "LNC190412KJ9", "15 días", "Sin cruce (Nacional)"),
     ]
@@ -271,8 +320,8 @@ def seed(conn: sqlite3.Connection):
             (cid, *c),
         )
     trips = [
-        ("FV-1042", "Rio Grande Transfer LLC", "Patio NL Km 8.5", "Killam Industrial, Laredo TX", "Comercio Mundial (WTB)", "T-12 + C-53-18", "José Armando Treviño", "Trailer transfer (Frontera)", "En frontera", 18500, "MXN", "2026-10-19 16:30 WTB export", "CBP-889120"),
-        ("FV-1043", "Industrias del Norte SA de CV", "Santa Catarina, NL", "Mines Rd yard, Laredo TX", "Colombia Solidaridad", "T-07 + C-53-04", "María Elena Cruz", "Internacional MX → USA (FTL)", "Asignado", 24800, "MXN", "2026-10-20 09:00 Colombia", "Pendiente"),
+        ("FV-1042", "Rio Grande Transfer LLC", "Patio NL Km 8.5", "Killam Industrial, Laredo TX", "Puente Comercio Mundial (WTB)", "T-12 + C-53-18", "José Armando Treviño", "Trailer transfer (Frontera)", "En frontera", 18500, "MXN", "2026-10-19 16:30 WTB export", "CBP-889120"),
+        ("FV-1043", "Industrias del Norte SA de CV", "Santa Catarina, NL", "Mines Rd yard, Laredo TX", "Puente Colombia Solidaridad", "T-07 + C-53-04", "María Elena Cruz", "Internacional MX → USA (FTL)", "Asignado", 24800, "MXN", "2026-10-20 09:00 Colombia", "Pendiente"),
         ("FV-1044", "Logística Nacional del Centro SC", "Apodaca, NL", "Cuautitlán Izcalli, Edo. Mex", "Sin cruce (Nacional / Doméstico)", "T-21 + C-53-09", "Luis Gerardo Salazar", "Nacional México (FTL)", "En ruta", 42000, "MXN", "Entrega 2026-10-22", "N/A"),
         ("FV-1045", "Rio Grande Transfer LLC", "Laredo, TX", "San Antonio / Austin, TX", "Sin cruce (Nacional / Doméstico)", "T-12 + C-53-18", "José Armando Treviño", "Doméstico USA (FTL)", "Cotizado", 1450, "USD", "2026-10-21 14:00", "USA-9921"),
     ]
@@ -382,6 +431,10 @@ def roles_allowed(*roles):
     return deco
 
 
+def is_superadmin():
+    return bool(session.get("is_superadmin")) or request.headers.get("X-Admin-Secret") == app.secret_key
+
+
 def row_to_dict(row):
     return dict(row) if row else None
 
@@ -441,7 +494,11 @@ def register():
         "INSERT INTO users(company_id,name,email,password_hash,role,active) VALUES (?,?,?,?, 'owner', 1)",
         (cid, data["name"].strip(), email, hash_password(data["password"])),
     )
+    # Por defecto para nueva empresa: activar WTB y Colombia (pueden agregar más en Mi Empresa)
+    db().execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'WTB', 1)", (cid,))
+    db().execute("INSERT OR REPLACE INTO company_ports(company_id, port_id, active) VALUES (?, 'COL', 1)", (cid,))
     db().commit()
+
     user = db().execute(
         """SELECT users.*, companies.name AS company_name, companies.base, companies.patio,
                   companies.active AS company_active, companies.billing_status
@@ -525,6 +582,44 @@ def update_company():
     return jsonify({"ok": True})
 
 
+@app.get("/api/company/ports")
+@login_required
+def get_company_ports():
+    cid = request.user["company_id"]
+    port_list = rows(
+        """SELECT p.id, p.name, p.lado_mx, p.lado_us, p.uso, p.nota,
+                  COALESCE(cp.active, 0) as active
+           FROM ports p
+           LEFT JOIN company_ports cp ON cp.port_id = p.id AND cp.company_id = ?
+           ORDER BY p.name""",
+        (cid,),
+    )
+    for p in port_list:
+        p["active"] = bool(p["active"])
+    return jsonify(port_list)
+
+
+@app.put("/api/company/ports")
+@roles_allowed("owner")
+def update_company_ports():
+    data = request.get_json(force=True)
+    port_ids = data.get("ports") or []
+    cid = request.user["company_id"]
+    db().execute("DELETE FROM company_ports WHERE company_id=?", (cid,))
+    for pid in port_ids:
+        if db().execute("SELECT id FROM ports WHERE id=?", (pid,)).fetchone():
+            db().execute("INSERT INTO company_ports(company_id, port_id, active) VALUES (?, ?, 1)", (cid, pid))
+    db().commit()
+    active_ports = rows(
+        """SELECT p.* FROM ports p
+           JOIN company_ports cp ON cp.port_id = p.id
+           WHERE cp.company_id = ? AND cp.active = 1
+           ORDER BY p.name""",
+        (cid,),
+    )
+    return jsonify({"ok": True, "active_ports": active_ports})
+
+
 @app.get("/api/bootstrap")
 @login_required
 def bootstrap():
@@ -533,6 +628,25 @@ def bootstrap():
     trips = rows("SELECT * FROM trips WHERE company_id=? ORDER BY id DESC", (cid,))
     if role == "operador":
         trips = [t for t in trips if t["operador"] == request.user["name"]]
+
+    active_ports = rows(
+        """SELECT p.* FROM ports p
+           JOIN company_ports cp ON cp.port_id = p.id
+           WHERE cp.company_id = ? AND cp.active = 1
+           ORDER BY p.name""",
+        (cid,),
+    )
+    all_ports = rows(
+        """SELECT p.id, p.name, p.lado_mx, p.lado_us, p.uso, p.nota,
+                  COALESCE(cp.active, 0) as active
+           FROM ports p
+           LEFT JOIN company_ports cp ON cp.port_id = p.id AND cp.company_id = ?
+           ORDER BY p.name""",
+        (cid,),
+    )
+    for p in all_ports:
+        p["active"] = bool(p["active"])
+
     payload = {
         "user": public_user(request.user, request.user),
         "units": rows("SELECT * FROM units WHERE company_id=? ORDER BY code", (cid,)),
@@ -543,71 +657,9 @@ def bootstrap():
         "money": rows("SELECT * FROM money WHERE company_id=? ORDER BY id DESC", (cid,)),
         "workorders": rows("SELECT * FROM workorders WHERE company_id=? ORDER BY id DESC", (cid,)),
         "docs": {},
-        "bridges": [
-            {
-                "id": "WTB",
-                "nombre": "Puente Comercio Mundial (WTB)",
-                "ladoMx": "Nuevo Laredo, TAMPS",
-                "ladoUs": "Laredo, TX",
-                "uso": "Carga pesada / trailers 53'",
-                "fila": "Puerto principal",
-                "nota": "Mayor puerto de carga terrestre México–EE.UU. Requiere FAST o pre-registro.",
-            },
-            {
-                "id": "COL",
-                "nombre": "Puente Colombia Solidaridad",
-                "ladoMx": "Anáhuac, NL",
-                "ladoUs": "Laredo, TX",
-                "uso": "Carga / trailers y transfer",
-                "fila": "Ruta ágil",
-                "nota": "Excelente opción para evitar congestionamiento en WTB o cargas desde NL.",
-            },
-            {
-                "id": "PHR",
-                "nombre": "Puente Internacional Pharr–Reynosa",
-                "ladoMx": "Reynosa, TAMPS",
-                "ladoUs": "Pharr, TX",
-                "uso": "Carga comercial e industrial",
-                "fila": "Comercial",
-                "nota": "Punto de cruce clave para el Valle de Texas y maquiladoras de Reynosa.",
-            },
-            {
-                "id": "ZAR",
-                "nombre": "Puente Zaragoza (Ysleta–Zaragoza)",
-                "ladoMx": "Cd. Juárez, CHIH",
-                "ladoUs": "El Paso, TX",
-                "uso": "Carga comercial maquila",
-                "fila": "Comercial",
-                "nota": "Cruce estratégico para el corredor industrial de Juárez y El Paso.",
-            },
-            {
-                "id": "OTY",
-                "nombre": "Garita Otay Mesa",
-                "ladoMx": "Tijuana, BC",
-                "ladoUs": "San Diego, CA",
-                "uso": "Carga comercial California",
-                "fila": "Comercial",
-                "nota": "Principal puerto fronterizo de exportación e importación hacia California.",
-            },
-            {
-                "id": "NAC",
-                "nombre": "Sin Cruce / Nacional MX o Doméstico USA",
-                "ladoMx": "Interior de la República",
-                "ladoUs": "Territorio USA",
-                "uso": "Flete nacional / local",
-                "fila": "N/A",
-                "nota": "Rutas nacionales en México (ej. MTY → CDMX) o domésticas en EE.UU. (ej. Laredo → Houston).",
-            },
-            {
-                "id": "OTRO",
-                "nombre": "Otro Cruce Fronterizo / Aduana",
-                "ladoMx": "Frontera Norte / Aduana",
-                "ladoUs": "Aduana USA",
-                "uso": "Cruce personalizado",
-                "fila": "Variable",
-                "nota": "Nogales, Piedras Negras, Matamoros u otros puertos de entrada.",
-            },
-        ],
+        "active_ports": active_ports,
+        "all_ports": all_ports,
+        "bridges": active_ports,
     }
     for d in rows("SELECT * FROM trip_docs WHERE company_id=?", (cid,)):
         payload["docs"].setdefault(d["folio"], []).append({"id": d["id"], "name": d["name"], "ok": bool(d["ok"])})
@@ -690,6 +742,17 @@ def add_trip():
     except ValueError:
         return jsonify({"error": "Monto de flete inválido"}), 400
 
+    puente = (data.get("puente") or "").strip()
+    if not puente:
+        first_port = db().execute(
+            """SELECT p.name FROM ports p
+               JOIN company_ports cp ON cp.port_id = p.id
+               WHERE cp.company_id = ? AND cp.active = 1
+               LIMIT 1""",
+            (cid,),
+        ).fetchone()
+        puente = first_port[0] if first_port else "Sin cruce (Nacional / Doméstico)"
+
     db().execute(
         """INSERT INTO trips(company_id,folio,cliente,origen,destino,puente,equipo,operador,tipo,estatus,flete,moneda,cita,sello)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -699,7 +762,7 @@ def add_trip():
             data.get("cliente"),
             origen,
             destino,
-            data.get("puente") or "Comercio Mundial (WTB)",
+            puente,
             data.get("equipo"),
             data.get("operador"),
             data.get("tipo") or "Trailer transfer (Frontera)",
@@ -905,15 +968,43 @@ def backup():
         "money": rows("SELECT * FROM money WHERE company_id=?", (cid,)),
         "workorders": rows("SELECT * FROM workorders WHERE company_id=?", (cid,)),
         "docs": rows("SELECT * FROM trip_docs WHERE company_id=?", (cid,)),
+        "company_ports": rows(
+            """SELECT p.id, p.name FROM ports p
+               JOIN company_ports cp ON cp.port_id = p.id
+               WHERE cp.company_id = ? AND cp.active = 1""",
+            (cid,),
+        ),
     }
     return jsonify(dump)
 
 
-# Control Superadmin para CruceLine (Corte por falta de pago y activación)
+# =====================================================================
+# Control y Pantalla Superadmin para CruceLine
+# =====================================================================
+@app.post("/api/admin/login")
+def admin_login():
+    data = request.get_json(force=True)
+    secret = (data.get("secret") or "").strip()
+    if not secret or secret != app.secret_key:
+        return jsonify({"error": "Clave maestra de Superadmin incorrecta"}), 401
+    session["is_superadmin"] = True
+    return jsonify({"ok": True})
+
+
+@app.post("/api/admin/logout")
+def admin_logout():
+    session.pop("is_superadmin", None)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/admin/check")
+def admin_check():
+    return jsonify({"is_superadmin": is_superadmin()})
+
+
 @app.get("/api/admin/companies")
 def admin_list_companies():
-    admin_key = request.headers.get("X-Admin-Secret")
-    if not admin_key or admin_key != app.secret_key:
+    if not is_superadmin():
         return jsonify({"error": "No autorizado como superadministrador de CruceLine"}), 401
     comps = rows(
         """SELECT id, name, base, patio, created_at, active, billing_status,
@@ -924,13 +1015,26 @@ def admin_list_companies():
     return jsonify(comps)
 
 
+@app.post("/api/admin/companies/<int:company_id>/toggle-active")
+def admin_toggle_company_active(company_id):
+    if not is_superadmin():
+        return jsonify({"error": "No autorizado como superadministrador de CruceLine"}), 401
+    cur = db().execute("SELECT active FROM companies WHERE id=?", (company_id,)).fetchone()
+    if not cur:
+        return jsonify({"error": "Empresa no encontrada"}), 404
+    new_active = 0 if cur["active"] == 1 else 1
+    new_billing = "suspended" if new_active == 0 else "active"
+    db().execute("UPDATE companies SET active=?, billing_status=? WHERE id=?", (new_active, new_billing, company_id))
+    db().commit()
+    return jsonify({"ok": True, "company_id": company_id, "active": new_active, "billing_status": new_billing})
+
+
 @app.post("/api/admin/companies/<int:company_id>/status")
 def admin_company_status(company_id):
-    admin_key = request.headers.get("X-Admin-Secret")
-    if not admin_key or admin_key != app.secret_key:
+    if not is_superadmin():
         return jsonify({"error": "No autorizado como superadministrador de CruceLine"}), 401
     data = request.get_json(force=True)
-    active = 1 if data.get("active", True) else 0
+    active = 1 if data.get("active") else 0
     billing_status = data.get("billing_status") or ("active" if active else "suspended")
     cur = db().execute(
         "UPDATE companies SET active=?, billing_status=? WHERE id=?",
