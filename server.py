@@ -530,6 +530,13 @@ def landing():
 
 @app.post("/api/soporte/chat")
 def soporte_chat():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Inicia sesión para consultar al asistente"}), 401
+
+    if user["company_active"] == 0:
+        return jsonify({"error": "Cuenta de empresa suspendida. Contacte a soporte de CruceLine."}), 403
+
     ip = request.remote_addr or "127.0.0.1"
     if not check_support_rate_limit(ip):
         return jsonify({
@@ -540,7 +547,6 @@ def soporte_chat():
 
     data = request.get_json(force=True, silent=True) or {}
     raw_messages = data.get("messages") or []
-    origen = str(data.get("origen") or "landing").strip().lower()
 
     api_key = os.environ.get("SOPORTE_API_KEY", "").strip()
     if not api_key:
@@ -549,97 +555,101 @@ def soporte_chat():
             "configured": False
         }), 200
 
-
     api_base = os.environ.get("SOPORTE_API_BASE", "https://api.openai.com/v1").rstrip("/")
     model = os.environ.get("SOPORTE_MODEL", "gpt-4o-mini").strip()
 
     system_prompt = (
         "Eres el asistente oficial de CruceLine, el TMS de despacho y control de patio para líneas de "
         "3 a 15 unidades en la frontera México–EE.UU. (Nuevo Laredo, Laredo TX, Colombia, Pharr, Juárez, Otay, etc.).\n\n"
-        "Tu objetivo es resolver las dudas del usuario directamente sobre cómo operar el sistema. "
-        "NO lo mandes a WhatsApp ni le digas que contacte a soporte para preguntas normales del sistema. "
-        "Explícale tú mismo los pasos en el menú lateral de forma clara, breve y en español de patio.\n\n"
-        "Módulos y funciones del sistema (menú lateral izquierdo):\n"
-        "- Clientes: Para dar de alta un cliente, ve a 'Clientes' en el menú lateral y haz clic en '+ Nuevo Cliente' (ingresa nombre, RFC, contacto y teléfono).\n"
-        "- Operadores / Choferes: En 'Operadores' haz clic en '+ Nuevo Operador' para registrar nombre, código de chofer (ej. OP-01), licencia federal, credencial FAST y vigencia de examen médico.\n"
-        "- Flota (Tractores y Cajas): En 'Flota' haz clic en '+ Nueva Unidad' para registrar tractores, cajas de 53' o rabones con sus placas (MX/TX), VIN, póliza de seguro y verificación.\n"
-        "- Viajes / Fletes: En 'Viajes / Fletes' haz clic en '+ Nueva Orden' para registrar una orden de despacho con cliente, tractor, caja, chofer asignado, puerto de cruce y tarifa acordada.\n"
+        "REGLA CRÍTICA - LISTA NEGRA (CruceLine NO HACE y NUNCA debes decir que hace):\n"
+        "- Timbrar CFDI 4.0 ni Carta Porte SAT ni dar UUID fiscal\n"
+        "- Sustituir PAC, contador, Aspel o CONTPAQi\n"
+        "- Despacho aduanal, pedimento, ANAM, CBP, broker\n"
+        "- GPS, mapa en vivo, cámaras, ELD, Samsara\n"
+        "- App de App Store / Play Store\n"
+        "- Filas del puente en tiempo real\n"
+        "- Pagar casetas, IAVE, FAST automático\n"
+        "- Borrar viajes (solo se ANULAN)\n"
+        "- Ver datos de OTRA empresa\n"
+        "- Crear empresas sin código de invitación\n\n"
+        "Si preguntan cualquiera de eso, responde EXACTO en espíritu:\n"
+        "\"Eso no lo hace CruceLine. Es despacho de patio y cruces. La factura SAT la sigue sacando tu contador. Si quieres a una persona, WhatsApp.\"\n\n"
+        "REGLAS DE RESPUESTA Y LÍMITES:\n"
+        "- NO inventes botones, menús ni módulos que no existan.\n"
+        "- Si no está en el snapshot de la empresa ni en estas reglas, di: \"no lo tengo en pantalla; revisa el menú o WhatsApp\".\n"
+        "- No mandes a WhatsApp para dudas normales (crear viaje, puertos, anular, roles).\n\n"
+        "Módulos y funciones reales del sistema (menú lateral izquierdo):\n"
+        "- Clientes: En 'Clientes' haz clic en '+ Nuevo Cliente' (ingresa nombre, RFC, contacto y teléfono).\n"
+        "- Operadores / Choferes: En 'Operadores' haz clic en '+ Nuevo Operador' para registrar nombre, código de chofer (ej. OP-01).\n"
+        "- Flota: En 'Flota' haz clic en '+ Nueva Unidad' para registrar tractores, cajas de 53' o rabones con sus placas.\n"
+        "- Viajes / Fletes: En 'Viajes / Fletes' haz clic en '+ Nueva Orden' para registrar una orden de despacho con origen, destino, tractor, chofer asignado, puerto de cruce y tarifa acordada.\n"
         "- Anular viaje: En 'Viajes / Fletes', abre el viaje y selecciona estatus 'Anulado' (solo Dueño o Despacho). El viaje no se borra de la base de datos pero sale de la cartera activa.\n"
         "- Citas & Andenes: Control de horarios de carga, descarga y cruces transfer.\n"
-        "- Puertos de Cruce: Consulta de puentes fronterizos autorizados (WTB, Colombia, etc.).\n"
+        "- Puertos de Cruce: Consulta de puentes fronterizos autorizados (WTB, Colombia, Pharr, etc.).\n"
+        "- Mi Empresa & Puertos: Configuración de la línea y activación de puentes fronterizos permitidos para tu empresa (para activar Pharr u otro puerto, ve a 'Mi Empresa & Puertos' y marca la casilla del puente deseado).\n"
         "- Taller: Registro de órdenes de mantenimiento preventivo y correctivo de unidades.\n"
         "- Liquidación: Control de cobranza, fletes entregados y saldos pendientes en pesos y dólares.\n"
-        "- Mi Empresa & Puertos: Configuración de la línea y activación de puentes fronterizos permitidos para tu empresa.\n"
         "- Usuarios: Dar de alta al personal con sus roles (Dueño, Despacho, Taller, Operador).\n\n"
         "Reglas clave del negocio:\n"
-        "- No emite CFDI ni Carta Porte oficial del SAT. No sustituye trámites de aduana ni brokers.\n"
-        "- No tiene GPS ni cámaras de video.\n"
         "- Empresa nueva solo puede 'Sin cruce' hasta activar sus puertos en 'Mi Empresa & Puertos'.\n"
         "- El operador solo ve sus viajes asignados si está vinculado a su chofer por ID.\n"
-        "- Precios: Instalación $4,000 MXN (único). 3–6 unidades: $2,490/mes (primeros 90 días), luego $3,490/mes. 7–15 unidades: $4,990/mes.\n\n"
-        "Instrucción estricta sobre WhatsApp:\n"
-        "Responde tú todas las dudas sobre el sistema. Solo sugiere WhatsApp si el usuario explícitamente pide hablar con una persona, o si reporta un problema técnico que impida usar el servidor. Para todo lo demás, resuelve la duda directamente aquí."
+        "- Precios: Instalación $4,000 MXN (único). 3–6 unidades: $2,490/mes (primeros 90 días), luego $3,490/mes. 7–15 unidades: $4,990/mes."
     )
 
-    user = current_user()
-    if user:
-        cid = user["company_id"]
-        c_name = user["company_name"]
-        u_role = user["role"]
-        ports_rows = db().execute(
-            "SELECT port_id FROM company_ports WHERE company_id=? AND active=1",
-            (cid,)
-        ).fetchall()
-        active_ports = [r["port_id"] for r in ports_rows]
-        ports_str = ", ".join(active_ports) if active_ports else "Sin puertos activos (solo Sin cruce)"
+    cid = user["company_id"]
+    c_name = user["company_name"]
+    u_role = user["role"]
+    ports_rows = db().execute(
+        "SELECT port_id FROM company_ports WHERE company_id=? AND active=1",
+        (cid,)
+    ).fetchall()
+    active_ports = [r["port_id"] for r in ports_rows]
+    ports_str = ", ".join(active_ports) if active_ports else "Sin puertos activos (solo Sin cruce)"
 
-        # Citas y Andenes en vivo de la empresa
-        appts_rows = db().execute(
-            "SELECT code, viaje, tipo, lugar, fecha, estatus FROM appointments WHERE company_id=? ORDER BY id DESC LIMIT 15",
-            (cid,)
-        ).fetchall()
-        appts_lines = [f"* {r['code']}: Viaje {r['viaje']} | Tipo: {r['tipo']} | Lugar: {r['lugar']} | Fecha: {r['fecha']} | Estatus: {r['estatus']}" for r in appts_rows]
-        appts_text = "\n".join(appts_lines) if appts_lines else "Sin citas registradas actualmente."
+    # Citas & Andenes (máx 8)
+    appts_rows = db().execute(
+        "SELECT code, viaje, tipo, lugar, fecha, estatus FROM appointments WHERE company_id=? ORDER BY id DESC LIMIT 8",
+        (cid,)
+    ).fetchall()
+    appts_lines = [f"* {r['code']}: Viaje {r['viaje']} | Tipo: {r['tipo']} | Lugar: {r['lugar']} | Fecha: {r['fecha']} | Estatus: {r['estatus']}" for r in appts_rows]
+    appts_text = "\n".join(appts_lines) if appts_lines else "Sin citas registradas actualmente."
 
-        # Viajes y Fletes en vivo de la empresa
-        trips_rows = db().execute(
-            "SELECT folio, cliente, origen, destino, puente, equipo, operador, estatus, flete, moneda, cita FROM trips WHERE company_id=? ORDER BY id DESC LIMIT 15",
-            (cid,)
-        ).fetchall()
-        trips_lines = [f"* {r['folio']}: {r['cliente']} | {r['origen']} -> {r['destino']} | Puerto: {r['puente']} | Unidad: {r['equipo']} | Chofer: {r['operador']} | Estatus: {r['estatus']} | Flete: ${r['flete']:,} {r['moneda']}" for r in trips_rows]
-        trips_text = "\n".join(trips_lines) if trips_lines else "Sin viajes registrados."
+    # Viajes y Fletes (máx 8) - SIN cliente
+    trips_rows = db().execute(
+        "SELECT folio, origen, destino, puente, operador, estatus, flete, moneda FROM trips WHERE company_id=? ORDER BY id DESC LIMIT 8",
+        (cid,)
+    ).fetchall()
+    trips_lines = [f"* {r['folio']}: {r['origen']} -> {r['destino']} | Puerto: {r['puente']} | Chofer: {r['operador']} | Estatus: {r['estatus']} | Flete: ${r['flete']:,} {r['moneda']}" for r in trips_rows]
+    trips_text = "\n".join(trips_lines) if trips_lines else "Sin viajes registrados."
 
-        # Flota (Tractores y Cajas)
-        units_rows = db().execute(
-            "SELECT code, tipo, placas, estatus, seguro, verif FROM units WHERE company_id=? LIMIT 20",
-            (cid,)
-        ).fetchall()
-        units_lines = [f"* {r['code']} ({r['tipo']}, Placas: {r['placas']}, Estatus: {r['estatus']})" for r in units_rows]
-        units_text = "\n".join(units_lines) if units_lines else "Sin unidades registradas."
+    # Flota (máx 10) - SIN seguro ni verificación
+    units_rows = db().execute(
+        "SELECT code, tipo, placas, estatus FROM units WHERE company_id=? LIMIT 10",
+        (cid,)
+    ).fetchall()
+    units_lines = [f"* {r['code']} ({r['tipo']}, Placas: {r['placas']}, Estatus: {r['estatus']})" for r in units_rows]
+    units_text = "\n".join(units_lines) if units_lines else "Sin unidades registradas."
 
-        # Operadores / Choferes
-        drivers_rows = db().execute(
-            "SELECT code, nombre, lic, fast, estatus FROM drivers WHERE company_id=? LIMIT 15",
-            (cid,)
-        ).fetchall()
-        drivers_lines = [f"* {r['code']}: {r['nombre']} (Lic: {r['lic']}, FAST: {r['fast']}, Estatus: {r['estatus']})" for r in drivers_rows]
-        drivers_text = "\n".join(drivers_lines) if drivers_lines else "Sin choferes registrados."
+    # Operadores / Choferes (máx 8) - SIN FAST ni licencia completa
+    drivers_rows = db().execute(
+        "SELECT code, nombre, estatus FROM drivers WHERE company_id=? LIMIT 8",
+        (cid,)
+    ).fetchall()
+    drivers_lines = [f"* {r['code']}: {r['nombre']} (Estatus: {r['estatus']})" for r in drivers_rows]
+    drivers_text = "\n".join(drivers_lines) if drivers_lines else "Sin choferes registrados."
 
-        system_prompt += (
-            f"\n\nContexto de sesión en vivo:\n"
-            f"Empresa: {c_name}\n"
-            f"Usuario actual: {user['name']} (Rol: {u_role})\n"
-            f"Puertos activos: {ports_str}\n\n"
-            f"--- DATOS OPERATIVOS EN TIEMPO REAL DE ESTA EMPRESA ---\n"
-            f"Tienes acceso completo de lectura a estos datos de la empresa. Si el usuario te pregunta por una cita específica (como CT-88, CT-89, etc.), viaje (FV-1042, etc.), chofer o tractor, respóndele directamente con los datos exactos que ves aquí (lugar, fecha, estatus, chofer, etc.):\n\n"
-            f"CITAS, ANDENES & ADUANA:\n{appts_text}\n\n"
-            f"VIAJES / FLETES:\n{trips_text}\n\n"
-            f"UNIDADES EN FLOTA:\n{units_text}\n\n"
-            f"OPERADORES / CHOFERES:\n{drivers_text}\n"
-        )
-    else:
-        system_prompt += f"\n\nContexto: Usuario visitante sin sesión activa en el sistema (origen: {origen})."
-
+    system_prompt += (
+        f"\n\nContexto de sesión en vivo:\n"
+        f"Empresa: {c_name}\n"
+        f"Usuario actual: {user['name']} (Rol: {u_role})\n"
+        f"Puertos activos: {ports_str}\n\n"
+        f"--- DATOS OPERATIVOS EN TIEMPO REAL DE ESTA EMPRESA ---\n"
+        f"Tienes acceso de lectura a estos datos de la empresa. Si el usuario te pregunta por una cita específica (como CT-88), viaje (FV-1042), chofer o unidad, respóndele directamente con los datos exactos que ves aquí:\n\n"
+        f"CITAS (máx 8):\n{appts_text}\n\n"
+        f"VIAJES (máx 8):\n{trips_text}\n\n"
+        f"UNIDADES (máx 10):\n{units_text}\n\n"
+        f"CHOFERES (máx 8):\n{drivers_text}\n"
+    )
 
     llm_messages = [{"role": "system", "content": system_prompt}]
     for m in raw_messages[-10:]:
@@ -652,8 +662,8 @@ def soporte_chat():
     payload = {
         "model": model,
         "messages": llm_messages,
-        "temperature": 0.3,
-        "max_tokens": 400
+        "temperature": 0.2,
+        "max_tokens": 350
     }
 
     req = urllib.request.Request(

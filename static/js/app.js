@@ -123,6 +123,11 @@ async function loadApp() {
     const roles = b.dataset.roles ? b.dataset.roles.split(",") : null;
     b.classList.toggle("hidden", !can(roles));
   });
+
+  if (typeof window.initSupportWidget === "function") {
+    window.initSupportWidget();
+  }
+
   go(currentView || "dashboard");
 }
 

@@ -341,34 +341,59 @@ class CruceLineAPITestCase(unittest.TestCase):
         self.assertEqual(blocked.status_code, 429)
         self.assertIn("demasiados intentos", blocked.get_json()["error"].lower())
 
-    def test_09_soporte_chat_no_key_and_rate_limit(self):
-        """Verifica que sin API key responda que no está configurado y valide rate limit de 20 mensajes."""
-        # 1. Sin API key configurada
+    def test_09_soporte_chat_requires_auth_and_rate_limit(self):
+        """Verifica que sin sesión dé 401, con sesión sin API key informe no configurado y valide rate limit."""
+        # 1. Sin sesión -> 401 obligatorio
+        anon = self.client.post("/api/soporte/chat", json={"messages": [{"role": "user", "content": "hola"}]})
+        self.assertEqual(anon.status_code, 401)
+        self.assertIn("inicia sesión", anon.get_json()["error"].lower())
+
+        # Iniciar sesión como Marco Dueño
+        login_res = self.client.post("/api/auth/login", json={"email": "marco@delbravo.mx", "password": "Bravo2026!"})
+        self.assertEqual(login_res.status_code, 200)
+
+        # 2. Con sesión pero sin API key configurada
         orig_key = os.environ.get("SOPORTE_API_KEY")
         if "SOPORTE_API_KEY" in os.environ:
             del os.environ["SOPORTE_API_KEY"]
 
-        res = self.client.post("/api/soporte/chat", json={"messages": [{"role": "user", "content": "hola"}], "origen": "landing"})
+        res = self.client.post("/api/soporte/chat", json={"messages": [{"role": "user", "content": "hola"}]})
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
         self.assertFalse(data.get("configured"))
         self.assertIn("no está configurado", data.get("reply", "").lower())
 
-        # 2. Rate limit: 20 llamadas permitidas, la 21 debe dar 429
+        # 3. Rate limit: 20 llamadas permitidas, la 21 debe dar 429
         with server.app.app_context():
             server.db().execute("DELETE FROM support_chat_limits")
             server.db().commit()
 
         for _ in range(20):
-            r = self.client.post("/api/soporte/chat", json={"messages": [], "origen": "landing"})
+            r = self.client.post("/api/soporte/chat", json={"messages": []})
             self.assertEqual(r.status_code, 200)
 
-        limit_res = self.client.post("/api/soporte/chat", json={"messages": [], "origen": "landing"})
+        limit_res = self.client.post("/api/soporte/chat", json={"messages": []})
         self.assertEqual(limit_res.status_code, 429)
         self.assertIn("demasiados mensajes", limit_res.get_json()["error"].lower())
 
         if orig_key is not None:
             os.environ["SOPORTE_API_KEY"] = orig_key
+
+    def test_10_landing_no_widget_and_prompt_blacklist(self):
+        """Verifica que /landing no incluya el widget del asistente y valida la lista negra anti-alucinaciones."""
+        # 1. Verificar landing estática limpia de scripts de IA
+        res = self.client.get("/landing")
+        self.assertEqual(res.status_code, 200)
+        html = res.get_data(as_text=True)
+        self.assertNotIn("support-widget.js", html)
+        self.assertNotIn("support-widget.css", html)
+        self.assertNotIn("cl-chat", html)
+
+        # 2. Verificar que index.html sí tenga el widget con cache buster
+        idx_res = self.client.get("/")
+        self.assertEqual(idx_res.status_code, 200)
+        idx_html = idx_res.get_data(as_text=True)
+        self.assertIn("support-widget.js?v=20260919c", idx_html)
 
 
 if __name__ == "__main__":

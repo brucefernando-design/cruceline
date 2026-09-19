@@ -9,8 +9,15 @@
   const origin = window.location.pathname.includes("landing") ? "landing" : "app";
   let history = []; // Últimos 10 mensajes [{role, content}]
   let isOpen = false;
+  let initialized = false;
 
   function initWidget() {
+    if (initialized) return;
+    if (typeof state === "undefined" || !state || !state.user) {
+      return;
+    }
+    initialized = true;
+
     // 1. Botón flotante para abrir el asistente
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "cl-chat-toggle";
@@ -167,6 +174,11 @@
 
         removeTypingIndicator();
 
+        if (response.status === 401) {
+          addMessageUI("assistant", "Sesión no válida o expirada. Por favor recarga e inicia sesión.");
+          return;
+        }
+
         if (response.status === 429) {
           addMessageUI("assistant", "Has enviado demasiados mensajes seguidos. Por favor espera unos minutos o dale clic a 'Hablar con una persona' para WhatsApp.");
           return;
@@ -191,9 +203,10 @@
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initWidget);
-  } else {
+  window.initSupportWidget = initWidget;
+
+  // Si state ya está cargado con usuario autenticado (ej. script diferido)
+  if (typeof state !== "undefined" && state && state.user) {
     initWidget();
   }
 })();
