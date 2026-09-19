@@ -336,7 +336,7 @@ function tripModal(trip) {
   // El combo respeta ESTRICTAMENTE los puertos activos de la empresa
   const activePortNames = (state.active_ports && state.active_ports.length > 0)
     ? state.active_ports.map((p) => p.name)
-    : ["Puente Comercio Mundial (WTB)", "Puente Colombia Solidaridad"];
+    : [];
 
   const portOptions = [...activePortNames, "Sin cruce (Nacional / Doméstico)"];
 
@@ -371,6 +371,7 @@ function tripModal(trip) {
         <div class="field"><label>Tipo de Flete / Modalidad</label><select name="tipo">${TRIP_TYPES.map((x) => `<option ${x === t.tipo ? "selected" : ""}>${x}</option>`).join("")}</select></div>
         <div class="field"><label>Cruce / Puerto Habilitado</label>
           <select name="puente">${portOptions.map((x) => `<option ${x === (t.puente || portOptions[0]) ? "selected" : ""}>${x}</option>`).join("")}</select>
+          ${activePortNames.length === 0 ? '<small class="muted" style="color:var(--bad);display:block;margin-top:4px">⚠️ Sin puertos habilitados. Configúralos en <b>Mi Empresa & Puertos</b> o usa flete nacional.</small>' : ''}
         </div>
         <div class="field"><label>Moneda</label><select name="moneda">${CURRENCIES.map((m) => `<option ${m === (t.moneda || "MXN") ? "selected" : ""}>${m}</option>`).join("")}</select></div>
         <div class="field"><label>Origen (Ciudad, Estado o Patio)</label><input name="origen" value="${t.origen || ""}" required placeholder="Ej: Patio NL Km 8.5 / Monterrey / CDMX"></div>
@@ -1148,10 +1149,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     /* Ignore */
   }
 
+  const checkSuperadminHash = () => {
+    if (location.hash === "#superadmin" && (!state || !state.user)) {
+      $("#login-box")?.classList.add("hidden");
+      $("#register-box")?.classList.add("hidden");
+      $("#superadmin-box")?.classList.remove("hidden");
+    }
+  };
+  window.addEventListener("hashchange", checkSuperadminHash);
+
   try {
     await api("/api/me");
     await loadApp();
   } catch {
     /* Muestra login */
+    checkSuperadminHash();
   }
 });
