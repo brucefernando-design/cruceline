@@ -1,7 +1,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-const STATUSES = ["Cotizado", "Asignado", "En ruta", "En frontera", "Entregado", "Liquidado"];
+const STATUSES = ["Cotizado", "Asignado", "En ruta", "En frontera", "Entregado", "Liquidado", "Anulado"];
 const TRIP_TYPES = [
   "Trailer transfer (Frontera)",
   "Internacional MX → USA (FTL)",
@@ -83,6 +83,7 @@ function statusBadge(s) {
     Asignado: "info",
     Entregado: "ok",
     Liquidado: "ok",
+    Anulado: "bad",
     Confirmada: "ok",
     "En proceso": "warn",
     Pendiente: "warn",
@@ -200,7 +201,7 @@ function renderDashboard() {
         <thead><tr><th>Folio</th><th>Ruta / Tipo</th><th>Cruce / Puerto</th><th>Operador / Equipo</th><th>Flete</th><th>Estatus</th></tr></thead>
         <tbody>
           ${
-            state.trips.filter((t) => !["Entregado", "Liquidado"].includes(t.estatus)).map(
+            state.trips.filter((t) => !["Entregado", "Liquidado", "Anulado"].includes(t.estatus)).map(
               (t) => `
             <tr style="cursor:pointer" data-trip="${t.folio}">
               <td><b>${t.folio}</b><div class="muted">${t.tipo}</div></td>
