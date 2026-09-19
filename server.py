@@ -592,9 +592,54 @@ def soporte_chat():
         ).fetchall()
         active_ports = [r["port_id"] for r in ports_rows]
         ports_str = ", ".join(active_ports) if active_ports else "Sin puertos activos (solo Sin cruce)"
-        system_prompt += f"\n\nContexto de sesión: Empresa: {c_name}. Rol del usuario: {u_role}. Puertos activos de tu empresa: {ports_str}."
+
+        # Citas y Andenes en vivo de la empresa
+        appts_rows = db().execute(
+            "SELECT code, viaje, tipo, lugar, fecha, estatus FROM appointments WHERE company_id=? ORDER BY id DESC LIMIT 15",
+            (cid,)
+        ).fetchall()
+        appts_lines = [f"* {r['code']}: Viaje {r['viaje']} | Tipo: {r['tipo']} | Lugar: {r['lugar']} | Fecha: {r['fecha']} | Estatus: {r['estatus']}" for r in appts_rows]
+        appts_text = "\n".join(appts_lines) if appts_lines else "Sin citas registradas actualmente."
+
+        # Viajes y Fletes en vivo de la empresa
+        trips_rows = db().execute(
+            "SELECT folio, cliente, origen, destino, puente, equipo, operador, estatus, flete, moneda, cita FROM trips WHERE company_id=? ORDER BY id DESC LIMIT 15",
+            (cid,)
+        ).fetchall()
+        trips_lines = [f"* {r['folio']}: {r['cliente']} | {r['origen']} -> {r['destino']} | Puerto: {r['puente']} | Unidad: {r['equipo']} | Chofer: {r['operador']} | Estatus: {r['estatus']} | Flete: ${r['flete']:,} {r['moneda']}" for r in trips_rows]
+        trips_text = "\n".join(trips_lines) if trips_lines else "Sin viajes registrados."
+
+        # Flota (Tractores y Cajas)
+        units_rows = db().execute(
+            "SELECT code, tipo, placas, estatus, seguro, verif FROM units WHERE company_id=? LIMIT 20",
+            (cid,)
+        ).fetchall()
+        units_lines = [f"* {r['code']} ({r['tipo']}, Placas: {r['placas']}, Estatus: {r['estatus']})" for r in units_rows]
+        units_text = "\n".join(units_lines) if units_lines else "Sin unidades registradas."
+
+        # Operadores / Choferes
+        drivers_rows = db().execute(
+            "SELECT code, nombre, lic, fast, estatus FROM drivers WHERE company_id=? LIMIT 15",
+            (cid,)
+        ).fetchall()
+        drivers_lines = [f"* {r['code']}: {r['nombre']} (Lic: {r['lic']}, FAST: {r['fast']}, Estatus: {r['estatus']})" for r in drivers_rows]
+        drivers_text = "\n".join(drivers_lines) if drivers_lines else "Sin choferes registrados."
+
+        system_prompt += (
+            f"\n\nContexto de sesión en vivo:\n"
+            f"Empresa: {c_name}\n"
+            f"Usuario actual: {user['name']} (Rol: {u_role})\n"
+            f"Puertos activos: {ports_str}\n\n"
+            f"--- DATOS OPERATIVOS EN TIEMPO REAL DE ESTA EMPRESA ---\n"
+            f"Tienes acceso completo de lectura a estos datos de la empresa. Si el usuario te pregunta por una cita específica (como CT-88, CT-89, etc.), viaje (FV-1042, etc.), chofer o tractor, respóndele directamente con los datos exactos que ves aquí (lugar, fecha, estatus, chofer, etc.):\n\n"
+            f"CITAS, ANDENES & ADUANA:\n{appts_text}\n\n"
+            f"VIAJES / FLETES:\n{trips_text}\n\n"
+            f"UNIDADES EN FLOTA:\n{units_text}\n\n"
+            f"OPERADORES / CHOFERES:\n{drivers_text}\n"
+        )
     else:
         system_prompt += f"\n\nContexto: Usuario visitante sin sesión activa en el sistema (origen: {origen})."
+
 
     llm_messages = [{"role": "system", "content": system_prompt}]
     for m in raw_messages[-10:]:
