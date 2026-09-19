@@ -37,6 +37,7 @@ class CruceLineAPITestCase(unittest.TestCase):
             db = server.db()
             # Limpiar intentos de login previos para evitar interferencia en tests
             db.execute("DELETE FROM login_attempts")
+            db.execute("DELETE FROM support_chat_limits")
             # Asegurar estado base limpio de Transportes del Bravo (empresa 1)
             pac_comps = [r[0] for r in db.execute("SELECT id FROM companies WHERE name LIKE '%Pacífico%' OR name LIKE '%AdminCo%'").fetchall()]
             for pid in pac_comps:
@@ -339,6 +340,35 @@ class CruceLineAPITestCase(unittest.TestCase):
         blocked = self.client.post("/api/auth/login", json={"email": email, "password": "wrongpassword"})
         self.assertEqual(blocked.status_code, 429)
         self.assertIn("demasiados intentos", blocked.get_json()["error"].lower())
+
+    def test_09_soporte_chat_no_key_and_rate_limit(self):
+        """Verifica que sin API key responda que no está configurado y valide rate limit de 20 mensajes."""
+        # 1. Sin API key configurada
+        orig_key = os.environ.get("SOPORTE_API_KEY")
+        if "SOPORTE_API_KEY" in os.environ:
+            del os.environ["SOPORTE_API_KEY"]
+
+        res = self.client.post("/api/soporte/chat", json={"messages": [{"role": "user", "content": "hola"}], "origen": "landing"})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertFalse(data.get("configured"))
+        self.assertIn("no está configurado", data.get("reply", "").lower())
+
+        # 2. Rate limit: 20 llamadas permitidas, la 21 debe dar 429
+        with server.app.app_context():
+            server.db().execute("DELETE FROM support_chat_limits")
+            server.db().commit()
+
+        for _ in range(20):
+            r = self.client.post("/api/soporte/chat", json={"messages": [], "origen": "landing"})
+            self.assertEqual(r.status_code, 200)
+
+        limit_res = self.client.post("/api/soporte/chat", json={"messages": [], "origen": "landing"})
+        self.assertEqual(limit_res.status_code, 429)
+        self.assertIn("demasiados mensajes", limit_res.get_json()["error"].lower())
+
+        if orig_key is not None:
+            os.environ["SOPORTE_API_KEY"] = orig_key
 
 
 if __name__ == "__main__":

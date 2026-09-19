@@ -634,6 +634,56 @@ a {
   margin-bottom: 28px;
 }
 
+.pricing-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.pricing-tier-row {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+}
+
+.pricing-tier-row.featured {
+  background: rgba(245, 185, 66, 0.08);
+  border-color: rgba(245, 185, 66, 0.35);
+}
+
+.pricing-tier-info strong {
+  display: block;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.pricing-tier-info span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.pricing-tier-price {
+  text-align: right;
+}
+
+.pricing-tier-price .amount {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.pricing-tier-price .period {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 .pricing-features {
   text-align: left;
   border-top: 1px solid var(--line);

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -225,6 +228,11 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ip TEXT NOT NULL,
             email TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS support_chat_limits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
         """
@@ -486,6 +494,21 @@ def clear_login_failures(ip: str, email: str):
     db().commit()
 
 
+def check_support_rate_limit(ip: str) -> bool:
+    cutoff = (datetime.now() - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    count = db().execute(
+        "SELECT COUNT(*) FROM support_chat_limits WHERE ip=? AND created_at >= ?",
+        (ip, cutoff),
+    ).fetchone()[0]
+    return count < 20
+
+
+def record_support_chat(ip: str):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db().execute("INSERT INTO support_chat_limits(ip, created_at) VALUES (?, ?)", (ip, now_str))
+    db().commit()
+
+
 def row_to_dict(row):
     return dict(row) if row else None
 
@@ -503,6 +526,121 @@ def index():
 @app.get("/landing/")
 def landing():
     return send_from_directory(STATIC, "landing.html")
+
+
+@app.post("/api/soporte/chat")
+def soporte_chat():
+    ip = request.remote_addr or "127.0.0.1"
+    if not check_support_rate_limit(ip):
+        return jsonify({
+            "error": "Demasiados mensajes. Por favor espera unos minutos o escríbenos por WhatsApp."
+        }), 429
+
+    record_support_chat(ip)
+
+    data = request.get_json(force=True, silent=True) or {}
+    raw_messages = data.get("messages") or []
+    origen = str(data.get("origen") or "landing").strip().lower()
+
+    api_key = os.environ.get("SOPORTE_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({
+            "reply": "El asistente no está configurado. Escríbenos por WhatsApp.",
+            "configured": False
+        }), 200
+
+
+    api_base = os.environ.get("SOPORTE_API_BASE", "https://api.openai.com/v1").rstrip("/")
+    model = os.environ.get("SOPORTE_MODEL", "gpt-4o-mini").strip()
+
+    system_prompt = (
+        "Eres el asistente de CruceLine, TMS de despacho para líneas de 3 a 15 unidades "
+        "en frontera México–EE.UU. (NL, Laredo, Pharr, Juárez, Otay, etc.).\n\n"
+        "Hechos:\n"
+        "- No emite CFDI ni Carta Porte SAT. No sustituye aduana ni broker.\n"
+        "- No tiene GPS ni cámaras.\n"
+        "- Puertos: la empresa los activa en Mi Empresa & Puertos.\n"
+        "- Empresa nueva solo puede \"Sin cruce\" hasta activar puertos.\n"
+        "- Roles: owner, dispatch, taller, operador.\n"
+        "- Operador solo ve sus viajes si está ligado al chofer.\n"
+        "- Anular viaje no lo borra; lo saca de cartera activa.\n"
+        "- Precios:\n"
+        "  Instalación $4,000 MXN una vez.\n"
+        "  3–6 unidades: $2,490/mes los primeros 90 días, luego $3,490/mes.\n"
+        "  7–15 unidades: $4,990/mes.\n"
+        "- Alta con código de invitación. Registro público cerrado.\n"
+        "- Soporte humano: WhatsApp (usa el link que te pasen).\n"
+        "- Sitio: https://tms.allia2.com.mx/\n\n"
+        "Si no sabes o piden caída del sistema, cobro, factura fiscal, cancelación de cuenta:\n"
+        "pide que escriban a WhatsApp. No inventes.\n\n"
+        "Responde corto, en español de patio. Nada de \"como modelo de lenguaje\"."
+    )
+
+    user = current_user()
+    if user:
+        cid = user["company_id"]
+        c_name = user["company_name"]
+        u_role = user["role"]
+        ports_rows = db().execute(
+            "SELECT port_id FROM company_ports WHERE company_id=? AND active=1",
+            (cid,)
+        ).fetchall()
+        active_ports = [r["port_id"] for r in ports_rows]
+        ports_str = ", ".join(active_ports) if active_ports else "Sin puertos activos (solo Sin cruce)"
+        system_prompt += f"\n\nContexto de sesión: Empresa: {c_name}. Rol del usuario: {u_role}. Puertos activos de tu empresa: {ports_str}."
+    else:
+        system_prompt += f"\n\nContexto: Usuario visitante sin sesión activa en el sistema (origen: {origen})."
+
+    llm_messages = [{"role": "system", "content": system_prompt}]
+    for m in raw_messages[-10:]:
+        if isinstance(m, dict):
+            r = m.get("role")
+            c = m.get("content")
+            if r in ("user", "assistant") and isinstance(c, str) and c.strip():
+                llm_messages.append({"role": r, "content": c.strip()[:1000]})
+
+    payload = {
+        "model": model,
+        "messages": llm_messages,
+        "temperature": 0.3,
+        "max_tokens": 400
+    }
+
+    req = urllib.request.Request(
+        f"{api_base}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            res_json = json.loads(resp.read().decode("utf-8"))
+            choices = res_json.get("choices") or []
+            if choices and "message" in choices[0]:
+                reply = choices[0]["message"].get("content", "").strip()
+            else:
+                reply = "No pude generar respuesta en este momento. Por favor contáctanos por WhatsApp."
+            return jsonify({"reply": reply, "configured": True}), 200
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        print(f"[SOPORTE AI ERROR] HTTP {e.code}: {err_body}")
+        return jsonify({
+            "reply": "Hubo un inconveniente al consultar el asistente. Escríbenos directamente por WhatsApp.",
+            "configured": True,
+            "error": f"HTTP {e.code}"
+        }), 200
+    except Exception as e:
+        print(f"[SOPORTE AI ERROR] {e}")
+        return jsonify({
+            "reply": "No fue posible conectar con el asistente en este momento. Por favor escríbenos por WhatsApp.",
+            "configured": True,
+            "error": str(e)
+        }), 200
+
 
 
 @app.get("/api/health")
